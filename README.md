@@ -381,6 +381,10 @@ The binary isn't baked into the Docker image (it's an optional ~100 MB Vulkan CL
 
 Per-frame AI upscaling is far slower than any other render pass in ClippyMe, which is why it's never part of the automatic pipeline — only an explicit per-clip action. It runs on CPU (via the bundled Mesa software Vulkan driver) everywhere, but a real GPU (`GPU_RUNTIME=nvidia`) is strongly recommended; clips longer than `CLIPPYME_UPSCALE_MAX_DURATION_SECONDS` (default 90s) are rejected up front to protect shared hosts.
 
+It is also **disk-hungry**: the clip is staged as PNG frames (source and upscaled sets coexist), which runs to roughly 6 GB for a 15s clip and 25 GB for a 60s one at 1080x1920. Frames are staged next to the clip in `output/` — the mounted data volume, not the container's `/tmp` — and a request is rejected up front when free space is short rather than failing mid-render. The default `CLIPPYME_UPSCALE_TIMEOUT_SECONDS` (600s) matches the shipped nginx `proxy_read_timeout`; raise both together or the browser gets a 504 while the render carries on server-side.
+
+Re-running a **reframe** on an upscaled clip re-renders it from the preserved 1080p source slice, so the clip drops back to 1080p and its upscale markers are cleared — the "Upscale to 4K" action becomes available again rather than claiming a 4K that is no longer on disk.
+
 ---
 
 ## Publishing (Zernio)

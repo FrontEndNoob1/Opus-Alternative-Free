@@ -21,13 +21,14 @@ request (``POST /api/upscale/{job_id}/{clip_index}``, see ``upscale_service``).
 """
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 
 from clippyme.domain.encode import ffmpeg_timeout, x264_video_args
 from clippyme.domain.errors import ConflictError, UpscaleError
 from clippyme.integrations import realesrgan_provisioner
-from clippyme.pipeline.media_probe import probe_dimensions
+from clippyme.pipeline.media_probe import parse_frame_rate, probe_dimensions, probe_duration
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,12 @@ VALID_SCALES = (2, 3, 4)
 MAX_LONG_EDGE = 3840
 
 _DEFAULT_MODEL = "realesrgan-x4plus"
-_DEFAULT_TIMEOUT_SECONDS = 3600
+# 600s matches the shipped nginx `proxy_read_timeout` (dashboard/nginx.conf).
+# Going past it would let the render keep running server-side long after the
+# proxy has already returned 504 to the browser — the user sees "upscale
+# failed" while the work silently continues. Raise BOTH together, the same way
+# MAX_FILE_SIZE_MB and nginx's client_max_body_size have to move in tandem.
+_DEFAULT_TIMEOUT_SECONDS = 600
 _DEFAULT_MAX_DURATION_SECONDS = 90
 
 
@@ -52,8 +58,10 @@ def default_model() -> str:
 
 def upscale_timeout() -> int:
     """Per-clip AI-pass timeout in seconds — ``CLIPPYME_UPSCALE_TIMEOUT_SECONDS``
-    (>0) or 3600. Deliberately far larger than ``ffmpeg_timeout()``: a per-frame
-    neural net pass on a CPU-only host can legitimately take a long time."""
+    (>0) or 600, matching the shipped nginx read timeout (see the constant).
+    A per-frame neural net pass on a CPU-only host can exceed this on longer
+    clips; raise this AND nginx's ``proxy_read_timeout`` together if you need
+    more, or run the upscale on a GPU host where it isn't close."""
     raw = (os.getenv("CLIPPYME_UPSCALE_TIMEOUT_SECONDS") or "").strip()
     if raw:
         try:
@@ -88,18 +96,35 @@ def plan_scale(width: int, height: int, requested_scale: int | None = None) -> i
     or when ``requested_scale`` isn't one of ``VALID_SCALES``. With no
     ``requested_scale``, picks the smallest scale in ``VALID_SCALES`` whose
     result reaches ``MAX_LONG_EDGE``.
+
+    A ``requested_scale`` is CAPPED so the result never overshoots 4K: 4x on a
+    1080x1920 clip would be a 4320x7680 (8K) render — 4x the pixels, render
+    time and disk of the 4K the feature actually promises.
     """
     long_edge = max(int(width), int(height))
     if long_edge >= MAX_LONG_EDGE:
         raise ValueError(f"Clip is already {width}x{height} — at/above 4K, nothing to upscale")
-    if requested_scale is not None:
-        if requested_scale not in VALID_SCALES:
-            raise ValueError(f"scale must be one of {VALID_SCALES}")
-        return requested_scale
+    if requested_scale is not None and requested_scale not in VALID_SCALES:
+        raise ValueError(f"scale must be one of {VALID_SCALES}")
     for scale in VALID_SCALES:
         if long_edge * scale >= MAX_LONG_EDGE:
-            return scale
-    return VALID_SCALES[-1]
+            # Smallest scale that reaches 4K — also the cap for a request.
+            return min(requested_scale, scale) if requested_scale else scale
+    return requested_scale or VALID_SCALES[-1]
+
+
+# Rough PNG size for one frame of real (noisy) video content, as a fraction of
+# raw RGB. Measured against ClippyMe renders; synthetic/flat footage compresses
+# far better, so this errs on the safe side for a pre-spend disk check.
+_PNG_RAW_RATIO = 0.45
+
+
+def estimate_peak_bytes(width: int, height: int, frame_count: int, scale: int) -> int:
+    """Estimated peak disk for one upscale: the source PNG frames plus the
+    ``scale``x upscaled ones, which coexist on disk. Pure — no I/O."""
+    per_source_frame = width * height * 3 * _PNG_RAW_RATIO
+    per_output_frame = per_source_frame * scale * scale
+    return int(frame_count * (per_source_frame + per_output_frame))
 
 
 def _probe_r_frame_rate(path: str, default: str = "30/1") -> str:
@@ -117,6 +142,13 @@ def _probe_r_frame_rate(path: str, default: str = "30/1") -> str:
         return value or default
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return default
+
+
+def _probe_fps_float(path: str, default: float = 30.0) -> float:
+    """Frame rate as a float, for frame-count estimation only. Degrades to
+    ``default`` on any unreadable/zero value (never raises)."""
+    rate = parse_frame_rate(_probe_r_frame_rate(path))
+    return rate if rate and rate > 0 else default
 
 
 def _run(cmd: list[str], *, timeout: int, step: str) -> None:
@@ -153,7 +185,12 @@ def upscale_video(input_path: str, output_path: str, *, scale: int,
     model = model or default_model()
     fps = _probe_r_frame_rate(input_path)
 
-    with tempfile.TemporaryDirectory(prefix="clippyme-upscale-") as tmp:
+    # Frames are staged NEXT TO the output clip, not in /tmp: a 60s 4K job
+    # stages many GB of PNGs, and in the shipped container /tmp is the image's
+    # writable layer (a tmpfs on some hosts — i.e. RAM) while the job dir is
+    # the mounted data volume that actually has the space.
+    with tempfile.TemporaryDirectory(prefix=".clippyme-upscale-",
+                                     dir=os.path.dirname(os.path.abspath(output_path))) as tmp:
         frames_in = os.path.join(tmp, "in")
         frames_out = os.path.join(tmp, "out")
         os.makedirs(frames_in, exist_ok=True)
@@ -193,6 +230,24 @@ def upscale_clip_to_4k(input_path: str, output_path: str, *, requested_scale: in
         scale = plan_scale(width, height, requested_scale)
     except ValueError as e:
         raise ConflictError(str(e))
+
+    # Pre-spend disk check: the staged PNG frames dwarf the clip itself, and
+    # running out mid-render wastes the whole (slow) pass and leaves ffmpeg
+    # failing on a half-written frame set. Fail fast with the real numbers
+    # instead — same "reject before spending" posture as pipeline/preflight.py.
+    frame_count = max(1, int(probe_duration(input_path) * _probe_fps_float(input_path)))
+    needed = estimate_peak_bytes(width, height, frame_count, scale)
+    stage_dir = os.path.dirname(os.path.abspath(output_path)) or "."
+    try:
+        free = shutil.disk_usage(stage_dir).free
+    except OSError:
+        free = None
+    if free is not None and free < needed:
+        raise ConflictError(
+            f"Not enough free disk to upscale this clip: needs about "
+            f"{needed / 1e9:.1f} GB of temporary frames, {free / 1e9:.1f} GB free. "
+            "Free up space, or upscale a shorter clip."
+        )
 
     upscale_video(input_path, output_path, scale=scale)
     return {"scale": scale, "width": width * scale, "height": height * scale}
