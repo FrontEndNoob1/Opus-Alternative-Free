@@ -65,7 +65,14 @@ Python backend is src-layout under `src/clippyme/` (`pip install -e .`):
   consumers pass `original_index`),
   `grade.py`, `clip_qa.py`, `clip_edit_ai.py`, `history_service.py`,
   `encode.py` (single source of x264 settings for every render pass),
-  `errors.py` (domain exceptions mapped to HTTP by one app-level handler).
+  `errors.py` (domain exceptions mapped to HTTP by one app-level handler),
+  `upscale.py` (impure orchestrator: frame-based 4K AI upscale via the free,
+  local Real-ESRGAN binary — ffmpeg frame extract → `realesrgan-ncnn-vulkan`
+  per-frame super-resolution → ffmpeg reassembly + original-audio re-mux;
+  never part of the automatic pipeline, opt-in per clip only) +
+  `upscale_service.py` (`POST /api/upscale/{job_id}/{clip_index}`
+  orchestration — mirrors `reframe_service.py`'s resolve → `clip_lock` →
+  render → atomic replace → metadata persist shape).
 - `pipeline/` — `orchestrator.py` (**the entrypoint queued jobs actually run**:
   preflight → checkpointed `main.py` stages → per-render output QA; owns
   retries, resume and `.clippyme_runtime.json`), `preflight.py` (pure-ish
@@ -101,6 +108,10 @@ Python backend is src-layout under `src/clippyme/` (`pip install -e .`):
   `socket.setdefaulttimeout` (it doesn't even apply to `getaddrinfo`).
 - `integrations/` — `social_publisher.py` (Zernio client + SmartScheduler),
   `auto_editor_updater.py` (auto-editor binary self-update),
+  `realesrgan_provisioner.py` (lazy fetch + SHA256-verify + cache of the free
+  Real-ESRGAN ncnn-vulkan binary from GitHub Releases on first upscale
+  request — never baked into the image; `resolve_binary()` prefers an
+  operator-installed PATH binary over anything it would download itself),
   `kick_client.py` (Kick channel/VOD JSON via curl_cffi, Cloudflare profile
   rotation), `twitch_client.py` (Helix app-token client: streams/users/videos),
   `youtube_feed.py` (UULF long-form RSS polling — Shorts structurally
@@ -281,6 +292,7 @@ through verbatim (the frontend parses per-platform 429 daily limits).
 | GET | `/api/transcript/{job_id}/{clip_index}` | Clip-relative transcript for manual trim |
 | POST | `/api/edit-ai/{job_id}/{clip_index}` | NL instruction → Gemini → `drop_ranges` |
 | POST | `/api/reframe/{job_id}/{clip_index}` | Switch reframe mode post-hoc |
+| POST | `/api/upscale/{job_id}/{clip_index}` | Upscale clip to 4K via Real-ESRGAN (free, local) |
 | POST | `/api/publish/{job_id}/{clip_index}` | Upload + schedule via Zernio |
 | GET/POST/DELETE | `/api/config*` | Keys, cookies, logo, fonts, Zernio (trusted clients) |
 | GET | `/api/history` · POST `/api/history/{id}/restore` · DELETE `/api/history/{id}` | Past jobs |

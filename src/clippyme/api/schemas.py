@@ -173,6 +173,13 @@ class ReframeRequest(BaseModel):
     letterbox_zoom: Optional[float] = Field(None, ge=0, le=15)
 
 
+class UpscaleRequest(BaseModel):
+    # None = auto-pick the smallest factor that reaches the 4K long edge
+    # (domain.upscale.plan_scale); the dashboard always sends 2 today since
+    # every clip renders at 1080x1920 (2x = exactly 2160x3840, "4K" vertical).
+    scale: Optional[int] = Field(None, ge=2, le=4)
+
+
 _OVERLAY_MAX_KEYS = 40
 _OVERLAY_MAX_STR = 1000
 _OVERLAY_MAX_ABS_NUM = 100_000

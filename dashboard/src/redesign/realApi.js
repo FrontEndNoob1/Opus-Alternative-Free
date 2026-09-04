@@ -164,6 +164,21 @@ export async function reframeClip(jobId, index, mode) {
   return res.json(); // { success, new_video_url }
 }
 
+export async function upscaleClip(jobId, index, scale) {
+  const res = await apiFetch(getApiUrl(`/api/upscale/${jobId}/${index}`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(scale ? { scale } : {}),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    const e = new Error(err.detail || `HTTP ${res.status}`);
+    e.status = res.status;
+    throw e;
+  }
+  return res.json(); // { success, new_video_url, scale, resolution }
+}
+
 export async function publishClip(jobId, index, body) {
   const res = await apiFetch(getApiUrl(`/api/publish/${jobId}/${index}`), {
     method: 'POST',

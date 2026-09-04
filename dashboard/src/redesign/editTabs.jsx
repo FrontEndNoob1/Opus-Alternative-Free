@@ -24,6 +24,33 @@ export function ReframeTab({ mode, onChange }) {
   );
 }
 
+// Standalone action (not part of the staged apply() pipeline — it renders
+// immediately server-side via POST /api/upscale, same as the manual-trim AI
+// button). Free, local Real-ESRGAN AI upscale; slow, so it's opt-in per clip.
+export function UpscaleAction({ busy, done, error, resolution, onUpscale }) {
+  return (
+    <div className="field" style={{ marginTop: 14 }}>
+      <span className="field-label">4K Upscale</span>
+      <div className="edit-opt">
+        <div className="eo-ico"><Icon n={busy ? 'loader' : 'sparkles'} /></div>
+        <div className="eo-txt">
+          <div className="eo-t">{done ? `Upscaled to ${resolution || '4K'}` : 'Upscale to 4K'}</div>
+          <div className="eo-d">
+            {busy ? 'Rendering with Real-ESRGAN (free, local AI) — this can take a while…'
+              : done ? 'Applied — the clip file on disk is now 4K.'
+              : 'Free, local AI upscale (Real-ESRGAN). No API cost. Slower on CPU-only servers.'}
+          </div>
+        </div>
+        <Btn onClick={onUpscale} disabled={busy || done}>
+          <Icon n={busy ? 'loader' : (done ? 'check' : 'wand-sparkles')} style={{ width: 14, height: 14 }} />
+          {busy ? 'Upscaling…' : done ? 'Done' : 'Upscale'}
+        </Btn>
+      </div>
+      {error && <div className="eo-d" style={{ marginTop: 6, color: 'var(--danger, #e5484d)' }}>{error}</div>}
+    </div>
+  );
+}
+
 export function SmartCutTab({ on, onChange, bulk }) {
   return (
     <>

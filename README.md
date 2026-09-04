@@ -299,6 +299,7 @@ All routes are JSON in / JSON out. Job IDs are strict UUID4. Config endpoints re
 | `GET` | `/api/transcript/{job_id}/{clip_index}` | Per-clip transcript segments for the manual-trim UI. |
 | `POST` | `/api/edit-ai/{job_id}/{clip_index}` | Conversational trim: a plain-English instruction → Gemini → spans to cut. |
 | `POST` | `/api/reframe/{job_id}/{clip_index}` | Switch a clip's reframe mode. |
+| `POST` | `/api/upscale/{job_id}/{clip_index}` | Upscale a clip to 4K via Real-ESRGAN (free, local AI, no API cost). |
 | `GET` | `/api/history` | Past jobs from disk. |
 | `POST` | `/api/history/{job_id}/restore` | Reload a past job into memory. |
 | `DELETE` | `/api/history/{job_id}` | Delete from disk. |
@@ -369,6 +370,16 @@ Inside **Auto**, three per-scene strategies are decided by sampling 7 frames per
 Override per job with `--reframe-mode auto|subject|disabled` (`subject` = the FrameShift face-first crop above, with `object` accepted as a legacy alias; `disabled` = 4:3 center crop with black bars).
 
 After a job completes, every clip can be flipped between all three modes post-hoc via `POST /api/reframe/{job_id}/{clip_index}` (the **Edit & reprocess** panel exposes the three modes and applies the switch on **Apply**). The original 16:9 source slice is preserved as `source_<clip>.mp4` to make this latency-tolerant. Legacy jobs without the preserved slice return HTTP 409.
+
+---
+
+## 4K upscale (free, local AI)
+
+`POST /api/upscale/{job_id}/{clip_index}` re-renders a finished clip at 2x-4x resolution via [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan) — a free, open-source, self-hosted super-resolution model. No API key, no per-call cost, nothing leaves your server. The **Edit & reprocess** panel's Reframe tab exposes an "Upscale to 4K" action that calls this endpoint directly.
+
+The binary isn't baked into the Docker image (it's an optional ~100 MB Vulkan CLI tool, not a core pipeline dependency); it's fetched once from GitHub Releases, SHA256-verified against the digest GitHub publishes for the asset, and cached at `data/bin/realesrgan` on first use — see `clippyme.integrations.realesrgan_provisioner`. Set `CLIPPYME_UPSCALE_AUTO_DOWNLOAD=0` to disable that and install the binary (+ its `models/` folder) yourself instead.
+
+Per-frame AI upscaling is far slower than any other render pass in ClippyMe, which is why it's never part of the automatic pipeline — only an explicit per-clip action. It runs on CPU (via the bundled Mesa software Vulkan driver) everywhere, but a real GPU (`GPU_RUNTIME=nvidia`) is strongly recommended; clips longer than `CLIPPYME_UPSCALE_MAX_DURATION_SECONDS` (default 90s) are rejected up front to protect shared hosts.
 
 ---
 
