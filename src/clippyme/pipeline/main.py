@@ -419,13 +419,22 @@ def get_viral_clips(transcript_result, video_duration, instructions=None):
         model_name = local_llm.model_name()
         print(f"🖥️  Analyzing with a local model ({model_name}) — no API key, no per-job cost")
     else:
-        print("🤖  Analyzing with Gemini...")
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            print("❌ Error: GEMINI_API_KEY not found in environment variables.")
-            return None
+        from clippyme.pipeline import gemini_auth
 
-        client = genai.Client(api_key=api_key)
+        print("🤖  Analyzing with Gemini...")
+        # Either an AI Studio key or Vertex AI + OAuth/ADC — the resolution
+        # owns that choice, and its error text is written for the operator.
+        auth = gemini_auth.resolve_auth(os.getenv("GEMINI_API_KEY"))
+        if not auth.ok:
+            print(f"❌ {auth.error}")
+            return None
+        print(f"🔑  Auth: {auth.describe()}")
+
+        try:
+            client = gemini_auth.build_client(os.getenv("GEMINI_API_KEY"))
+        except Exception as e:
+            print(f"❌ Could not authenticate to Gemini: {e}")
+            return None
 
         # Use selected model from env, or default to gemini-3.5-flash
         model_name = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")

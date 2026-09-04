@@ -373,6 +373,36 @@ After a job completes, every clip can be flipped between all three modes post-ho
 
 ---
 
+## Gemini auth: API key or OAuth
+
+Two ways to authenticate, chosen with `GEMINI_AUTH_MODE`:
+
+| Mode | Setup | Credentials |
+|------|-------|-------------|
+| `api_key` (default) | Paste an [AI Studio key](https://aistudio.google.com/apikey) in Settings | A key on disk / in the request header |
+| `vertex` (aliases `oauth`, `adc`) | `GOOGLE_CLOUD_PROJECT=<id>` — no key at all | Application Default Credentials |
+
+In `vertex` mode ClippyMe talks to Vertex AI and lets the SDK resolve Application Default Credentials, which is the standard Google OAuth story — any of:
+
+```bash
+gcloud auth application-default login          # OAuth browser consent, refreshed automatically
+export GOOGLE_APPLICATION_CREDENTIALS=sa.json  # service account
+# …or nothing at all, if you deploy on Google Cloud (metadata server)
+```
+
+ClippyMe deliberately does **not** host an OAuth client of its own. Doing so would make every self-hoster register a Google Cloud OAuth app, configure a consent screen and manage redirect URIs — strictly more setup than pasting a key, for identical access. ADC already gives you the browser consent flow with none of that.
+
+The keyless modes also relax the API gate: `POST /api/process` and `/api/batch` only demand the `X-Gemini-Key` header when the deployment actually needs one, so Vertex and `LLM_PROVIDER=local` can submit jobs.
+
+**Two caveats.** Vertex AI is a billed Google Cloud service and does *not* share AI Studio's free tier — pick it for how you authenticate (no long-lived key on disk, IAM, org policy), not to save money. And under Docker, ADC lives at `~/.config/gcloud` on the **host**, so mount it in:
+
+```yaml
+volumes:
+  - ~/.config/gcloud:/home/appuser/.config/gcloud:ro
+```
+
+---
+
 ## Running it for free (no API keys)
 
 Gemini is the only step of a job that can cost money — download, reframe, render, Smart Cut, captions and the 4K upscale are already local. Two settings move the remaining paid steps onto your own hardware:

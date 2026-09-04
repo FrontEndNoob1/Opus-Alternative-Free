@@ -96,6 +96,13 @@ Python backend is src-layout under `src/clippyme/` (`pip install -e .`):
   ever overriding the speaker-attribution rule; the
   per-word payload is TOON-encoded (`encode_words_toon`, ~50% smaller than
   JSON) while the response contract stays JSON),
+  `gemini_auth.py` (single owner of HOW Gemini is authenticated:
+  `GEMINI_AUTH_MODE=api_key` (default) or `vertex`/`oauth`/`adc` — the latter
+  uses Vertex AI + Application Default Credentials, so no key exists;
+  `resolve_auth()` is pure/host-tested and `build_client()` is the only place
+  a `genai.Client` is constructed. `requires_api_key()` is what the API layer
+  gates the `X-Gemini-Key` header on — demanding it unconditionally locks out
+  both keyless setups, Vertex and `LLM_PROVIDER=local`),
   `local_llm.py` (free zero-cost provider: `LLM_PROVIDER=local` points viral
   detection at an OpenAI-compatible local server — Ollama/LM Studio/llama.cpp/
   vLLM — reusing the SAME prompt and `gemini_parser` chain; `LocalResponse`

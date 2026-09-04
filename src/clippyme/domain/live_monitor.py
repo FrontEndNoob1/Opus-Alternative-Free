@@ -1143,7 +1143,9 @@ class LiveMonitor:
         job_dir = os.path.join(self._output_dir, job_id)
         os.makedirs(job_dir, exist_ok=True)
         env = os.environ.copy()
-        env["GEMINI_API_KEY"] = self._gemini_key
+        # "" not None: a keyless deployment (Vertex/OAuth, or LLM_PROVIDER=local)
+        # has no key to pass, and a None in the subprocess env is a TypeError.
+        env["GEMINI_API_KEY"] = self._gemini_key or ""
         # Bound each segment's clip count for the publish-limited monitor —
         # the pipeline keeps the top-N by viral_score (get_viral_clips).
         # `or 5` would turn a deliberate 0 back into 5 — 0 is the "no cap"

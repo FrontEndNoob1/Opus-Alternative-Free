@@ -291,6 +291,25 @@ async def root():
 async def health():
     return {"status": "healthy"}
 
+
+def require_gemini_key_header(request: Request) -> str:
+    """The caller's ``X-Gemini-Key``, or "" when this deployment doesn't need one.
+
+    Demanding the header unconditionally locks out both keyless setups: Vertex
+    AI/OAuth (credentials come from ADC) and ``LLM_PROVIDER=local`` (Gemini
+    isn't involved at all). Returns "" rather than None because the value is
+    copied straight into the subprocess environment, which takes strings only.
+    """
+    from clippyme.pipeline import gemini_auth
+
+    api_key = request.headers.get("X-Gemini-Key")
+    if api_key:
+        return api_key
+    if gemini_auth.requires_api_key():
+        raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
+    return ""
+
+
 @app.post("/api/process")
 async def process_endpoint(
     request: Request,
@@ -302,9 +321,7 @@ async def process_endpoint(
     require_trusted_config_request(request)
     # ~20 single-job submissions/min per client; compute-heavy, so throttle.
     enforce_rate_limit(request, "process", capacity=20, refill_per_sec=20 / 60)
-    api_key = request.headers.get("X-Gemini-Key")
-    if not api_key:
-        raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
+    api_key = require_gemini_key_header(request)
 
     # Handle JSON body via ProcessRequest for URL payloads. Pydantic
     # enforces the reframe_mode regex and the instructions length cap
@@ -460,9 +477,7 @@ async def batch_process(req: BatchRequest, request: Request):
     require_trusted_config_request(request)
     # Each batch can enqueue up to 20 jobs, so limit batch calls more tightly.
     enforce_rate_limit(request, "batch", capacity=10, refill_per_sec=10 / 60)
-    api_key = request.headers.get("X-Gemini-Key")
-    if not api_key:
-        raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
+    api_key = require_gemini_key_header(request)
 
     batch_jobs = []
 
@@ -700,7 +715,10 @@ async def edit_clip_ai(
     cfg = load_persistent_config() or {}
     key = api_key or os.environ.get("GEMINI_API_KEY") or cfg.get("GEMINI_API_KEY")
     model = req.model or cfg.get("GEMINI_MODEL") or "gemini-3.5-flash"
-    if not key:
+    from clippyme.pipeline import gemini_auth
+
+    # Keyless in Vertex/OAuth mode; suggest_drops resolves ADC itself.
+    if not key and gemini_auth.requires_api_key():
         raise HTTPException(status_code=400, detail="Gemini API key not configured")
 
     from clippyme.domain.clip_edit_ai import suggest_drops

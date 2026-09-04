@@ -26,12 +26,22 @@ def list_available_models(api_key: Optional[str]) -> dict:
 
     Result shape: ``{"models": [...], "error": "..."}``.
     """
-    if not api_key:
+    from clippyme.pipeline import gemini_auth
+
+    if gemini_auth.is_vertex():
+        # Keyless: ADC supplies the credentials, but the project must be set.
+        auth = gemini_auth.resolve_auth(api_key)
+        if not auth.ok:
+            return {"models": [], "error": auth.error}
+    elif not api_key:
+        # The CALLER resolves the key (config_routes already falls back to the
+        # environment). An explicitly empty key means "don't try" — resolving
+        # env a second time here would construct a client the caller declined.
         return {"models": [], "error": "API Key missing"}
 
     try:
-        client = genai.Client(
-            api_key=api_key,
+        client = gemini_auth.build_client(
+            api_key,
             http_options=genai_types.HttpOptions(timeout=LIST_MODELS_TIMEOUT_MS),
         )
         models: List[dict] = []
