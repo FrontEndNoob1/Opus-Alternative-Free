@@ -73,7 +73,7 @@ function SourcePanel({ opts, set }) {
           {opts.source === 'url' ? (
             <div className="input">
               <Icon n="link" />
-              <input value={opts.url} placeholder="Paste a video link (YouTube, Twitch, or Kick)"
+              <input value={opts.url} placeholder="Paste a video link (YouTube, Twitch, Kick, TikTok, X…)"
                 onChange={(e) => set({ url: e.target.value })} />
               <button type="button" className="paste" onClick={async () => {
                 try {
@@ -420,7 +420,7 @@ export function CreateView({ opts, set, onPickPreset, onCreate, presets, default
   return (
     <div className="container fade-in">
       <Hero eyebrow="Drop a link · get scroll-stopping shorts" line1="Long videos in." grad="Viral shorts out."
-        sub="Drop a link from YouTube, Twitch, or Kick (or upload a file) and ClippyMe does the rest: transcribes it, finds the best moments, reframes and trims them, and queues the top clips to post." />
+        sub="Drop a link from YouTube, Twitch, Kick, TikTok, X and more (or upload a file) and ClippyMe does the rest: transcribes it, finds the best moments, reframes and trims them, and queues the top clips to post." />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
         {/* Order: pick a source first, then optionally start from a preset,
             then fine-tune the recipe by hand. */}
