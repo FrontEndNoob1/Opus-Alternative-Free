@@ -96,6 +96,11 @@ Python backend is src-layout under `src/clippyme/` (`pip install -e .`):
   ever overriding the speaker-attribution rule; the
   per-word payload is TOON-encoded (`encode_words_toon`, ~50% smaller than
   JSON) while the response contract stays JSON),
+  `local_llm.py` (free zero-cost provider: `LLM_PROVIDER=local` points viral
+  detection at an OpenAI-compatible local server — Ollama/LM Studio/llama.cpp/
+  vLLM — reusing the SAME prompt and `gemini_parser` chain; `LocalResponse`
+  duck-types google-genai's `.text`/`.usage_metadata` so the caller needs no
+  branching, and cost is recorded as $0 with token counts kept),
   `media_probe.py` (ffprobe + silencedetect wrappers), `texttiling_ops.py`
   (no-AI topic-segmentation fallback), `deepgram_transcribe.py`,
   `elevenlabs_transcribe.py`, `gemini_service.py`, `gemini_parser.py`,

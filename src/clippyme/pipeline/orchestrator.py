@@ -340,7 +340,16 @@ def _run_preflight(args, input_video: str, output_dir: str, state: RuntimeState,
         free_disk = shutil.disk_usage(output_dir).free
     except OSError:
         free_disk = None
-    model = args.model or os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+    # With LLM_PROVIDER=local the analysis runs on the operator's own hardware,
+    # so preflight must estimate against THAT model — quoting a Gemini price
+    # that will never be spent would also trip CLIPPYME_MAX_ESTIMATED_COST_USD
+    # for a job that costs nothing.
+    from clippyme.pipeline import local_llm
+
+    if local_llm.is_local():
+        model = local_llm.model_name()
+    else:
+        model = args.model or os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
     report = build_preflight(
         PreflightInputs(
             duration_seconds=duration,

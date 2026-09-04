@@ -404,24 +404,37 @@ def transcribe_video(video_path):
                     pass
 
 def get_viral_clips(transcript_result, video_duration, instructions=None):
-    print("🤖  Analyzing with Gemini...")
+    from clippyme.pipeline import local_llm
+
     get_viral_clips._last_gemini_exhausted = False
 
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        print("❌ Error: GEMINI_API_KEY not found in environment variables.")
-        return None
+    # LLM_PROVIDER=local swaps in a model on your own hardware. The prompt and
+    # the parsing chain are identical either way — only the responder changes,
+    # which is what makes a fully free job possible (see local_llm).
+    use_local = local_llm.is_local()
+    client = None
+    model_chain = []
 
-    client = genai.Client(api_key=api_key)
-    
-    # Use selected model from env, or default to gemini-3.5-flash
-    model_name = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+    if use_local:
+        model_name = local_llm.model_name()
+        print(f"🖥️  Analyzing with a local model ({model_name}) — no API key, no per-job cost")
+    else:
+        print("🤖  Analyzing with Gemini...")
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            print("❌ Error: GEMINI_API_KEY not found in environment variables.")
+            return None
 
-    model_chain = build_model_chain(model_name, os.getenv("GEMINI_FALLBACK_MODELS"))
-    print(f"🤖  Initializing Gemini with model chain: {' → '.join(model_chain)}")
+        client = genai.Client(api_key=api_key)
 
-    if any(old in model_name for old in ("1.0", "1.5", "2.0")):
-        print(f"⚠️  WARNING: {model_name} is deprecated. Please switch to gemini-3.5-flash or later via the dashboard.")
+        # Use selected model from env, or default to gemini-3.5-flash
+        model_name = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+
+        model_chain = build_model_chain(model_name, os.getenv("GEMINI_FALLBACK_MODELS"))
+        print(f"🤖  Initializing Gemini with model chain: {' → '.join(model_chain)}")
+
+        if any(old in model_name for old in ("1.0", "1.5", "2.0")):
+            print(f"⚠️  WARNING: {model_name} is deprecated. Please switch to gemini-3.5-flash or later via the dashboard.")
 
     # Prompt building (word flattening, untrusted-instructions fencing,
     # template fill) is pure — it lives in gemini_request, host-tested.
@@ -437,19 +450,32 @@ def get_viral_clips(transcript_result, video_duration, instructions=None):
 
     max_attempts = int(os.getenv("GEMINI_MAX_RETRIES", "3") or "3")
     try:
-        response, model_name = generate_with_model_fallback(
-            client, prompt, model_chain, max_attempts=max_attempts)
+        if use_local:
+            # No model chain: a local server runs one model, and there is no
+            # quota to fall back from.
+            response = local_llm.generate(prompt)
+        else:
+            response, model_name = generate_with_model_fallback(
+                client, prompt, model_chain, max_attempts=max_attempts)
     except Exception as e:
-        if is_rate_limit_error(e):
+        if not use_local and is_rate_limit_error(e):
             get_viral_clips._last_gemini_exhausted = True
             print("🚫 All Gemini models rate-limited — no clips this run.")
-        print(f"❌ Gemini API failed across model chain: {e}")
+        print(f"❌ {'Local LLM' if use_local else 'Gemini API'} failed: {e}")
         return None
 
     # --- Cost Calculation (pure math in gemini_request) ---
     cost_analysis = None
+    if use_local:
+        # Same record shape, all zeros — the dashboard and metadata read it
+        # without a special case.
+        cost_analysis = local_llm.local_cost_analysis(response, model_name)
+        print(
+            f"💰 Local model — no API cost "
+            f"({cost_analysis['input_tokens']} in / {cost_analysis['output_tokens']} out tokens)"
+        )
     try:
-        usage = response.usage_metadata
+        usage = None if use_local else response.usage_metadata
         if usage:
             cost_analysis = compute_gemini_cost(
                 usage.prompt_token_count, usage.candidates_token_count, model_name)
@@ -488,6 +514,15 @@ def get_viral_clips(transcript_result, video_duration, instructions=None):
             """
             retry_model = os.getenv("GEMINI_RETRY_MODEL", "gemini-2.5-flash") or "gemini-2.5-flash"
             retry_prompt = build_reformat_prompt(err_msg, text)
+            if use_local:
+                # Same trick, same model: hand back only the broken output to
+                # reformat, never the transcript again.
+                try:
+                    print("🔁 Retry via the local model (reformat only)")
+                    return local_llm.generate(retry_prompt).text or ""
+                except Exception as e:
+                    print(f"⚠️  Local LLM retry failed: {e}")
+                    return ""
             try:
                 retry_chain = build_model_chain(
                     retry_model, os.getenv("GEMINI_FALLBACK_MODELS"))

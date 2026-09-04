@@ -373,6 +373,25 @@ After a job completes, every clip can be flipped between all three modes post-ho
 
 ---
 
+## Running it for free (no API keys)
+
+Gemini is the only step of a job that can cost money — download, reframe, render, Smart Cut, captions and the 4K upscale are already local. Two settings move the remaining paid steps onto your own hardware:
+
+```bash
+LLM_PROVIDER=local                 # viral detection on a local model
+LOCAL_LLM_BASE_URL=http://localhost:11434/v1   # Ollama, LM Studio, llama.cpp, vLLM
+LOCAL_LLM_MODEL=qwen2.5:14b-instruct
+TRANSCRIPTION_PROVIDER=whisper     # local Faster-Whisper instead of Deepgram
+```
+
+That's a job with no key, no quota and no per-clip spend. The provider speaks the OpenAI-compatible `/chat/completions` shape, which every common local runner exposes, and it reuses the **same prompt and the same five-level JSON repair chain** as the Gemini path — only the responder changes. Cost is recorded as `$0.00` with the token counts kept, so the dashboard reads it without a special case, and preflight estimates against the local model so a spend limit can't reject a job that costs nothing.
+
+Running under Docker, `localhost` is the *container* — point at the host with `http://host.docker.internal:11434/v1`.
+
+**The honest tradeoff:** a local model is weaker at the copywriting half of the prompt than Gemini. Clip *selection* holds up well; clip *titles and hooks* degrade first, and small models are the worst offenders — use 14B or larger before judging the results. Gemini's free tier (`gemini-2.5-flash`) is the other zero-cost route if you'd rather trade a quota for quality; the default model chain already avoids the pro models, which are quota-zero on that tier.
+
+---
+
 ## Download-only mode
 
 Send `download_only: true` with `POST /api/process` (or flip **Download only** in the Create recipe) to fetch a source video and stop there — no transcription, no Gemini call, no render, so the job costs nothing but bandwidth. The dashboard shows the fetched file with a Download button instead of a clip grid.
