@@ -18,7 +18,7 @@ export const PRESET_KEYS = [
   'smartcut', 'zoom',
   'subtitles', 'subMode', 'subPreset', 'subPosition', 'subFont', 'subColor',
   'hooks', 'hookPos', 'hookSize', 'hookStyle',
-  'logo', 'logoPos', 'logoSize', 'language',
+  'logo', 'logoPos', 'logoSize', 'language', 'gradePreset',
 ];
 
 export function captureOpts(opts) {

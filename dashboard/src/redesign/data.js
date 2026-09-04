@@ -19,6 +19,20 @@ export const PRESETS = [
     opts: { clips: 9, aspect: '9:16', reframeMode: 'auto', detect: true, smartcut: true, zoom: false,
       subtitles: true, subMode: 'classic', subPreset: 'classic_white', hooks: true },
   },
+  {
+    id: 'modern_viral_podcast', icon: 'trending-up', title: 'Modern Viral Podcast',
+    desc: 'Best all-around — bold white/green karaoke captions, punchy grade, subtle zooms, fast cuts.',
+    opts: { clips: 7, aspect: '9:16', reframeMode: 'auto', detect: true, smartcut: true, zoom: true,
+      subtitles: true, subMode: 'karaoke', subPreset: 'hormozi_bold', subColor: '#FFFFFF',
+      hooks: true, gradePreset: 'cool_crisp' },
+  },
+  {
+    id: 'clean_premium', icon: 'star', title: 'Clean Premium',
+    desc: 'Natural colours, white captions, minimal animation, cinematic contrast, almost no effects.',
+    opts: { clips: 5, aspect: '9:16', reframeMode: 'auto', detect: true, smartcut: true, zoom: false,
+      subtitles: true, subMode: 'karaoke', subPreset: 'minimal_clean', subColor: '#FFFFFF',
+      hooks: false, gradePreset: 'neutral_punch' },
+  },
 ];
 
 // Per-job Gemini model quick-picker (Create → Clip Options). '' = use the
