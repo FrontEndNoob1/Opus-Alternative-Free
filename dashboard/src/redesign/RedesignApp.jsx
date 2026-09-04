@@ -32,6 +32,7 @@ const DEFAULT_OPTS = {
   mode: 'single', source: 'url', url: '', file: null, fileName: '', batch: '', batchFiles: [], instructions: '',
   clipsAuto: true, clips: 7, aspect: '9:16',
   detect: true, reframeMode: 'auto', letterboxZoom: 0, smartcut: true, zoom: true, model: '',
+  downloadOnly: false,
   subtitles: true, subMode: 'karaoke', subPreset: 'hormozi_bold',
   // Bottom-left is the default reading position: low enough to stay out of the
   // picture, left so it clears the right-edge social UI.
@@ -417,7 +418,7 @@ export default function RedesignApp() {
           clipStates={clipStates} onUpdateClipState={updateClipStateT} onBack={resetToCreate}
           onPublish={openPublish} onPublishAll={openPublish} onEdit={(c, i) => setEditClip({ clip: c, idx: i })}
           onApplyToAll={applyClipToAll} onEditSelected={(targets) => setBulkEdit({ targets })}
-          pushToast={pushToast} />
+          pushToast={pushToast} download={results?.download} />
       )}
 
       {tab === 'live' && <LiveMonitorView pushToast={pushToast} />}
@@ -437,7 +438,7 @@ export default function RedesignApp() {
             clipStates={clipStates} onUpdateClipState={updateClipStateT}
             onPublish={openPublish} onPublishAll={openPublish} onEdit={(c, i) => setEditClip({ clip: c, idx: i })}
             onApplyToAll={applyClipToAll} onEditSelected={(targets) => setBulkEdit({ targets })}
-            pushToast={pushToast} />
+            pushToast={pushToast} download={results?.download} />
         </div>
       )}
 

@@ -55,6 +55,7 @@ def build_main_cmd(
     aspect: str | None = None,
     model: str | None = None,
     monitor: bool = False,
+    download_only: bool = False,
 ) -> list[str]:
     """Build argv for the checkpointed backend pipeline.
 
@@ -121,6 +122,10 @@ def build_main_cmd(
         cmd.extend(["--model", model.strip()])
     if monitor:
         cmd.append("--monitor")
+    # Fetch-and-stop: the orchestrator returns straight after acquiring the
+    # source, so none of the analysis flags above reach a stage that runs.
+    if download_only:
+        cmd.append("--download-only")
     return cmd
 
 
@@ -177,8 +182,28 @@ def _result_payload(data: dict, clips: list, output_dir: str) -> dict:
         "cost_analysis": data.get("cost_analysis"),
         "source_info": data.get("source_info"),
     }
+    # Download-only jobs have no clips by construction — the fetched file IS
+    # the result, so it rides here with a /videos URL the dashboard can offer.
+    download = data.get("source_download")
+    if data.get("download_only") and isinstance(download, dict):
+        payload["download_only"] = True
+        payload["download"] = {
+            **download,
+            "video_url": _download_url(download.get("filename"), output_dir),
+        }
     payload.update(runtime_result_fields(output_dir))
     return payload
+
+
+def _download_url(filename, output_dir: str) -> str | None:
+    """`/videos/<job>/<file>` for a download-only result, or None when the
+    filename is missing/unsafe. Rejects anything with a path separator so a
+    tampered metadata file can't point the dashboard outside the job dir."""
+    if not isinstance(filename, str) or not filename:
+        return None
+    if "/" in filename or "\\" in filename or ".." in filename:
+        return None
+    return f"/videos/{os.path.basename(output_dir)}/{filename}"
 
 
 def load_partial_result(job_id: str, output_dir: str) -> dict | None:

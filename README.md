@@ -287,7 +287,7 @@ All routes are JSON in / JSON out. Job IDs are strict UUID4. Config endpoints re
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/api/process` | Single video (URL or upload). Accepts `reframe_mode`, per-job `model`. |
+| `POST` | `/api/process` | Single video (URL or upload). Accepts `reframe_mode`, per-job `model`, `download_only`. |
 | `POST` | `/api/batch` | Up to 20 URLs in one shot. |
 | `GET` | `/api/status/{job_id}` | Live status + logs + result (clips stream in as they finish). |
 | `POST` | `/api/pause/{job_id}` | Suspend the running job (resume-able). |
@@ -370,6 +370,14 @@ Inside **Auto**, three per-scene strategies are decided by sampling 7 frames per
 Override per job with `--reframe-mode auto|subject|disabled` (`subject` = the FrameShift face-first crop above, with `object` accepted as a legacy alias; `disabled` = 4:3 center crop with black bars).
 
 After a job completes, every clip can be flipped between all three modes post-hoc via `POST /api/reframe/{job_id}/{clip_index}` (the **Edit & reprocess** panel exposes the three modes and applies the switch on **Apply**). The original 16:9 source slice is preserved as `source_<clip>.mp4` to make this latency-tolerant. Legacy jobs without the preserved slice return HTTP 409.
+
+---
+
+## Download-only mode
+
+Send `download_only: true` with `POST /api/process` (or flip **Download only** in the Create recipe) to fetch a source video and stop there — no transcription, no Gemini call, no render, so the job costs nothing but bandwidth. The dashboard shows the fetched file with a Download button instead of a clip grid.
+
+It reuses the same hardened yt-dlp path every job already uses (`pipeline/download.py`: SSRF guards, cookie support, player-client rotation, error classification), so cookies and the `YTDLP_*` knobs apply unchanged. The orchestrator returns immediately after acquiring the source, which also means the downloaded file is never cleaned up — keeping it is the entire point of the mode. URL jobs only: an uploaded file is already on disk.
 
 ---
 

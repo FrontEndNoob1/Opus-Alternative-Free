@@ -39,6 +39,8 @@ export async function submitProcessJob(data, apiKey, { signal } = {}) {
   const noZoom = data.preselections?.no_zoom === true;
   const letterboxZoom = Number(data.preselections?.letterbox_zoom) || 0;
   const skipAnalysis = data.preselections?.skip_analysis === true;
+  // URL jobs only — an uploaded file is already on disk, nothing to fetch.
+  const downloadOnly = data.preselections?.download_only === true;
   const model = (data.preselections?.model || '').trim();
 
   if (data.type === 'url') {
@@ -51,6 +53,7 @@ export async function submitProcessJob(data, apiKey, { signal } = {}) {
     if (language) jsonBody.language = language;
     if (noZoom) jsonBody.no_zoom = true;
     if (skipAnalysis) jsonBody.skip_analysis = true;
+    if (downloadOnly) jsonBody.download_only = true;
     if (model) jsonBody.model = model;
     body = JSON.stringify(jsonBody);
   } else {

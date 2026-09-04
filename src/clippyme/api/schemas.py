@@ -92,6 +92,9 @@ class ProcessRequest(BaseModel):
     language: Optional[str] = Field(None, max_length=16)
     no_zoom: Optional[bool] = False
     skip_analysis: Optional[bool] = False
+    # Fetch the source and stop — no transcription, no Gemini spend, no render.
+    # Every clip-shaping field above is inert when this is set.
+    download_only: Optional[bool] = False
     model: Optional[str] = Field(
         None, max_length=72, pattern=r"^gemini-[A-Za-z0-9.\-]{1,64}$"
     )

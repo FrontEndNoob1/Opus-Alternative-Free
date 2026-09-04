@@ -96,6 +96,59 @@ def test_build_main_cmd_no_monitor_by_default():
     assert "--monitor" not in cmd
 
 
+def test_build_main_cmd_download_only_flag():
+    cmd = build_main_cmd(url="https://youtu.be/abc", output_dir="/out", download_only=True)
+    assert "--download-only" in cmd
+
+
+def test_build_main_cmd_no_download_only_by_default():
+    cmd = build_main_cmd(url="https://youtu.be/abc", output_dir="/out")
+    assert "--download-only" not in cmd
+
+
+def _write_download_metadata(tmp_path, job_dir_name="job-dl", filename="Clip.mp4"):
+    job_dir = tmp_path / job_dir_name
+    job_dir.mkdir()
+    (job_dir / "src_metadata.json").write_text(json.dumps({
+        "download_only": True,
+        "shorts": [],
+        "source_download": {
+            "filename": filename, "title": "A Video", "size_bytes": 1234,
+            "duration": 12.5, "width": 1920, "height": 1080,
+            "url": "https://youtu.be/abc",
+        },
+    }))
+    return job_dir
+
+
+def test_download_only_result_exposes_the_fetched_file(tmp_path):
+    """A download-only job has no clips by construction, so the result has to
+    carry the file itself or the dashboard has nothing to offer the user."""
+    job_dir = _write_download_metadata(tmp_path)
+    result = load_final_result("job-dl", str(job_dir))
+    assert result["download_only"] is True
+    assert result["clips"] == []
+    assert result["download"]["video_url"] == "/videos/job-dl/Clip.mp4"
+    assert result["download"]["size_bytes"] == 1234
+
+
+def test_download_url_rejects_a_traversing_filename(tmp_path):
+    """Metadata is on-disk state a tampered/corrupt file could carry — a
+    filename with separators must not become a URL pointing out of the job."""
+    job_dir = _write_download_metadata(tmp_path, filename="../../etc/passwd")
+    result = load_final_result("job-dl", str(job_dir))
+    assert result["download"]["video_url"] is None
+
+
+def test_normal_job_result_has_no_download_key(tmp_path):
+    job_dir = tmp_path / "job-normal"
+    job_dir.mkdir()
+    (job_dir / "src_metadata.json").write_text(json.dumps({"shorts": []}))
+    result = load_final_result("job-normal", str(job_dir))
+    assert "download" not in result
+    assert "download_only" not in result
+
+
 def test_reframe_mode_subject_is_forwarded():
     cmd = build_main_cmd(url="https://x.com/v", output_dir="o", reframe_mode="subject")
     assert cmd[cmd.index("--reframe-mode") + 1] == "subject"

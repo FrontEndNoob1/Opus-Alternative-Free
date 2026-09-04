@@ -267,8 +267,28 @@ function OptionsPanel({ opts, set }) {
   const [hookCfg, setHookCfg] = useState(false);
   const [logoCfg, setLogoCfg] = useState(false);
   const [bannerCfg, setBannerCfg] = useState(false);
+  // Download-only is a URL-job concept: an uploaded file is already on disk.
+  // Gated on the source so a flag left over from a URL job can't blank the
+  // recipe after the user switches to an upload.
+  const urlJob = opts.mode === 'single' && opts.source === 'url';
+  const downloadMode = urlJob && opts.downloadOnly === true;
   return (
     <Panel title="Recipe" sub="What ClippyMe makes from each video" icon="sliders-horizontal">
+      {urlJob && (
+        <>
+          <div className="label" style={{ marginBottom: 4 }}>Mode</div>
+          <OptRow icon="download" label="Download only"
+            desc="Just fetch the video — no transcription, no AI, no clips"
+            on={opts.downloadOnly === true} set={(v) => set({ downloadOnly: v })} />
+        </>
+      )}
+      {downloadMode ? (
+        <div className="od" style={{ margin: '12px 2px 2px', lineHeight: 1.5 }}>
+          ClippyMe fetches the source and hands it back as a file — nothing else
+          in the recipe applies, and no Gemini credits are spent.
+        </div>
+      ) : (
+      <>
       <div className="label" style={{ marginBottom: 4 }}>Output</div>
       <div className="opt">
         <div className="oico"><Icon n="scissors" /></div>
@@ -360,6 +380,8 @@ function OptionsPanel({ opts, set }) {
         <div className="r"><GradeControls withOff full={false} preset={opts.gradePreset || 'none'}
           onChange={(p) => set({ gradePreset: p.preset })} /></div>
       </div>
+      </>
+      )}
     </Panel>
   );
 }

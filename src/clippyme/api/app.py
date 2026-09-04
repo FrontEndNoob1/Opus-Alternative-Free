@@ -318,6 +318,9 @@ async def process_endpoint(
     language = None
     no_zoom = False
     skip_analysis = False
+    # URL submissions only: an uploaded file is already on disk, so there is
+    # nothing for a download-only job to fetch.
+    download_only = False
     model = None
     content_type = request.headers.get("content-type", "")
     if "application/json" in content_type:
@@ -336,6 +339,7 @@ async def process_endpoint(
         language = validated.language
         no_zoom = bool(validated.no_zoom)
         skip_analysis = bool(validated.skip_analysis)
+        download_only = bool(validated.download_only)
         model = validated.model
 
     # For multipart/form-data uploads, extract reframe_mode + language from form fields
@@ -428,6 +432,7 @@ async def process_endpoint(
             language=language,
             no_zoom=no_zoom,
             skip_analysis=skip_analysis,
+            download_only=download_only,
             model=model,
         )
     except ValueError as exc:
