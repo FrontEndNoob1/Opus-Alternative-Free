@@ -21,6 +21,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     python3.11 python3.11-venv python3.11-dev python3.11-distutils \
     ffmpeg libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 libcairo2 \
+    libvulkan1 mesa-vulkan-drivers \
     curl unzip ca-certificates gosu && \
     curl -fsSL https://deno.land/install.sh | sh -s v2.8.3 && \
     mv /root/.deno/bin/deno /usr/local/bin/ && \
@@ -47,7 +48,11 @@ RUN apt-get update && \
     (/usr/local/bin/auto-editor --version || echo "auto-editor version check failed (non-fatal)")
 
 ENV NVIDIA_VISIBLE_DEVICES=all
-ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+# 'graphics' (on top of the CUDA-only compute,utility) lets the NVIDIA
+# container runtime mount the host's Vulkan ICD, so the free Real-ESRGAN 4K
+# upscale action (domain/upscale.py) can use the real GPU via Vulkan instead
+# of falling back to the much slower mesa-vulkan-drivers software rasterizer.
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
 
 # ============================================================
 # Stage 2b: CPU runtime (multi-arch: amd64, arm64, Apple Silicon)
@@ -57,6 +62,7 @@ FROM python:3.11-slim AS runtime-cpu
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ffmpeg libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 libcairo2 \
+    libvulkan1 mesa-vulkan-drivers \
     curl unzip ca-certificates gosu && \
     curl -fsSL https://deno.land/install.sh | sh -s v2.8.3 && \
     mv /root/.deno/bin/deno /usr/local/bin/ && \

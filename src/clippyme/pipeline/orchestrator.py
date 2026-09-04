@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from clippyme.domain.job_artifacts import save_job_metadata
 from clippyme.domain.runtime_state import RuntimeState
 from clippyme.pipeline.media_qa import inspect_clip, probe_media
 from clippyme.pipeline.preflight import (
@@ -143,6 +144,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("-o", "--output", type=str, required=True)
     parser.add_argument("--keep-original", action="store_true")
     parser.add_argument("--skip-analysis", action="store_true")
+    parser.add_argument(
+        "--download-only", action="store_true",
+        help="Fetch the source and stop — no transcription, no Gemini spend, no render. "
+             "Implies --keep-original (deleting the file we were asked to fetch is the "
+             "one thing this mode must never do).",
+    )
     parser.add_argument("-c", "--cookies", type=str)
     parser.add_argument("--instructions", type=str)
     parser.add_argument("--no-zoom", action="store_true")
@@ -270,6 +277,53 @@ def _prepare_input(args: argparse.Namespace, output_dir: str, state: RuntimeStat
     return input_video, video_title
 
 
+def _finish_download_only(*, input_video: str, video_title: str, output_dir: str,
+                          url: str | None, state: RuntimeState) -> int:
+    """Record the fetched source and finish the job. Returns the exit code.
+
+    The API surfaces the file through this metadata, so the shape matters: an
+    empty ``shorts`` keeps every existing clip consumer working unchanged
+    (they all iterate it), while ``source_download`` carries what the dashboard
+    needs to offer the file itself.
+    """
+    state.start("finalizing", "recording downloaded source", progress=95)
+    filename = os.path.basename(input_video)
+    try:
+        size_bytes = os.path.getsize(input_video)
+    except OSError:
+        size_bytes = 0
+    probe = probe_media(input_video) or {}
+
+    payload: dict[str, Any] = {
+        "download_only": True,
+        "shorts": [],
+        "source_download": {
+            "filename": filename,
+            "title": video_title,
+            "size_bytes": size_bytes,
+            "duration": float(probe.get("duration") or 0.0),
+            "width": probe.get("width"),
+            "height": probe.get("height"),
+            "url": url,
+        },
+    }
+    # Fold in yt-dlp's own sidecar (uploader, upload date, …) when it exists.
+    sidecar = os.path.join(output_dir, "source_info.json")
+    if os.path.exists(sidecar):
+        try:
+            with open(sidecar, encoding="utf-8") as handle:
+                payload["source_info"] = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    base = sanitize_windows_basename(video_title) or "download"
+    save_job_metadata(os.path.join(output_dir, f"{base}_metadata.json"), payload)
+    state.complete_stage("finalizing", detail="source downloaded")
+    state.finish("download complete")
+    print(f"✅ Downloaded {filename} ({size_bytes / 1e6:.1f} MB) — no AI stages run", flush=True)
+    return 0
+
+
 def _run_preflight(args, input_video: str, output_dir: str, state: RuntimeState, legacy):
     state.start("preflight", "checking duration, cost and capacity")
     probe = probe_media(input_video)
@@ -286,7 +340,16 @@ def _run_preflight(args, input_video: str, output_dir: str, state: RuntimeState,
         free_disk = shutil.disk_usage(output_dir).free
     except OSError:
         free_disk = None
-    model = args.model or os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+    # With LLM_PROVIDER=local the analysis runs on the operator's own hardware,
+    # so preflight must estimate against THAT model — quoting a Gemini price
+    # that will never be spent would also trip CLIPPYME_MAX_ESTIMATED_COST_USD
+    # for a job that costs nothing.
+    from clippyme.pipeline import local_llm
+
+    if local_llm.is_local():
+        model = local_llm.model_name()
+    else:
+        model = args.model or os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
     report = build_preflight(
         PreflightInputs(
             duration_seconds=duration,
@@ -664,6 +727,18 @@ def run(argv: list[str] | None = None) -> int:
 
         aspect_ratio = _expected_aspect(args.aspect)
         input_video, video_title = _prepare_input(args, output_dir, state, legacy)
+        if getattr(args, "download_only", False):
+            # Stop here: the source is on disk and that is the whole job. Every
+            # remaining stage (preflight's cost estimate, transcription, Gemini,
+            # render) exists to serve clip production, so running any of it
+            # would spend money and time on output nobody asked for.
+            return _finish_download_only(
+                input_video=input_video,
+                video_title=video_title,
+                output_dir=output_dir,
+                url=args.url,
+                state=state,
+            )
         _preflight, duration = _run_preflight(args, input_video, output_dir, state, legacy)
         transcript = _load_or_transcribe(args, input_video, state, legacy)
         clips_data, metadata_file = _load_or_analyze(

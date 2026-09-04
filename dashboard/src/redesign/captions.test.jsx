@@ -20,6 +20,7 @@ vi.mock('./realApi', () => ({
   })),
   editClipAI: vi.fn(),
   listFonts: vi.fn(async () => ({ fonts: [] })),
+  upscaleClip: vi.fn(),
 }));
 
 const CLIP = { viral_score: 88, title: 'A clip', viral_hook_text: 'THIS changed everything' };

@@ -55,6 +55,19 @@ export function downloadClip(clip, index) {
   document.body.removeChild(a);
 }
 
+// Download-only jobs have no clips — the fetched source itself is the result.
+// Same anchor trick as downloadClip, keeping URL resolution inside this module.
+export function downloadSource(download) {
+  if (!download?.video_url) return;
+  const a = document.createElement('a');
+  a.href = safeResolveUrl(download.video_url);
+  a.download = download.filename || 'video.mp4';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
 export async function cancelJob(jobId) {
   try { await apiFetch(getApiUrl(`/api/cancel/${jobId}`), { method: 'POST' }); } catch { /* best-effort */ }
 }
@@ -162,6 +175,21 @@ export async function reframeClip(jobId, index, mode) {
     throw e;
   }
   return res.json(); // { success, new_video_url }
+}
+
+export async function upscaleClip(jobId, index, scale) {
+  const res = await apiFetch(getApiUrl(`/api/upscale/${jobId}/${index}`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(scale ? { scale } : {}),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    const e = new Error(err.detail || `HTTP ${res.status}`);
+    e.status = res.status;
+    throw e;
+  }
+  return res.json(); // { success, new_video_url, scale, resolution }
 }
 
 export async function publishClip(jobId, index, body) {
@@ -393,6 +421,9 @@ export function optsToPreselections(opts) {
     language: opts.language,
     no_zoom: !opts.zoom,
     skip_analysis: !opts.detect,
+    // Fetch the source and stop — no transcription, no Gemini spend, no render.
+    // Every clip-shaping field here is inert when it's on.
+    download_only: opts.downloadOnly === true,
     smartcut: opts.smartcut,
     // Per-job Gemini model override (quick-picker). Omitted when blank →
     // lib/api.js skips the field and the backend uses the Settings default.

@@ -65,7 +65,14 @@ Python backend is src-layout under `src/clippyme/` (`pip install -e .`):
   consumers pass `original_index`),
   `grade.py`, `clip_qa.py`, `clip_edit_ai.py`, `history_service.py`,
   `encode.py` (single source of x264 settings for every render pass),
-  `errors.py` (domain exceptions mapped to HTTP by one app-level handler).
+  `errors.py` (domain exceptions mapped to HTTP by one app-level handler),
+  `upscale.py` (impure orchestrator: frame-based 4K AI upscale via the free,
+  local Real-ESRGAN binary — ffmpeg frame extract → `realesrgan-ncnn-vulkan`
+  per-frame super-resolution → ffmpeg reassembly + original-audio re-mux;
+  never part of the automatic pipeline, opt-in per clip only) +
+  `upscale_service.py` (`POST /api/upscale/{job_id}/{clip_index}`
+  orchestration — mirrors `reframe_service.py`'s resolve → `clip_lock` →
+  render → atomic replace → metadata persist shape).
 - `pipeline/` — `orchestrator.py` (**the entrypoint queued jobs actually run**:
   preflight → checkpointed `main.py` stages → per-render output QA; owns
   retries, resume and `.clippyme_runtime.json`), `preflight.py` (pure-ish
@@ -89,6 +96,18 @@ Python backend is src-layout under `src/clippyme/` (`pip install -e .`):
   ever overriding the speaker-attribution rule; the
   per-word payload is TOON-encoded (`encode_words_toon`, ~50% smaller than
   JSON) while the response contract stays JSON),
+  `gemini_auth.py` (single owner of HOW Gemini is authenticated:
+  `GEMINI_AUTH_MODE=api_key` (default) or `vertex`/`oauth`/`adc` — the latter
+  uses Vertex AI + Application Default Credentials, so no key exists;
+  `resolve_auth()` is pure/host-tested and `build_client()` is the only place
+  a `genai.Client` is constructed. `requires_api_key()` is what the API layer
+  gates the `X-Gemini-Key` header on — demanding it unconditionally locks out
+  both keyless setups, Vertex and `LLM_PROVIDER=local`),
+  `local_llm.py` (free zero-cost provider: `LLM_PROVIDER=local` points viral
+  detection at an OpenAI-compatible local server — Ollama/LM Studio/llama.cpp/
+  vLLM — reusing the SAME prompt and `gemini_parser` chain; `LocalResponse`
+  duck-types google-genai's `.text`/`.usage_metadata` so the caller needs no
+  branching, and cost is recorded as $0 with token counts kept),
   `media_probe.py` (ffprobe + silencedetect wrappers), `texttiling_ops.py`
   (no-AI topic-segmentation fallback), `deepgram_transcribe.py`,
   `elevenlabs_transcribe.py`, `gemini_service.py`, `gemini_parser.py`,
@@ -101,6 +120,10 @@ Python backend is src-layout under `src/clippyme/` (`pip install -e .`):
   `socket.setdefaulttimeout` (it doesn't even apply to `getaddrinfo`).
 - `integrations/` — `social_publisher.py` (Zernio client + SmartScheduler),
   `auto_editor_updater.py` (auto-editor binary self-update),
+  `realesrgan_provisioner.py` (lazy fetch + SHA256-verify + cache of the free
+  Real-ESRGAN ncnn-vulkan binary from GitHub Releases on first upscale
+  request — never baked into the image; `resolve_binary()` prefers an
+  operator-installed PATH binary over anything it would download itself),
   `kick_client.py` (Kick channel/VOD JSON via curl_cffi, Cloudflare profile
   rotation), `twitch_client.py` (Helix app-token client: streams/users/videos),
   `youtube_feed.py` (UULF long-form RSS polling — Shorts structurally
@@ -281,6 +304,7 @@ through verbatim (the frontend parses per-platform 429 daily limits).
 | GET | `/api/transcript/{job_id}/{clip_index}` | Clip-relative transcript for manual trim |
 | POST | `/api/edit-ai/{job_id}/{clip_index}` | NL instruction → Gemini → `drop_ranges` |
 | POST | `/api/reframe/{job_id}/{clip_index}` | Switch reframe mode post-hoc |
+| POST | `/api/upscale/{job_id}/{clip_index}` | Upscale clip to 4K via Real-ESRGAN (free, local) |
 | POST | `/api/publish/{job_id}/{clip_index}` | Upload + schedule via Zernio |
 | GET/POST/DELETE | `/api/config*` | Keys, cookies, logo, fonts, Zernio (trusted clients) |
 | GET | `/api/history` · POST `/api/history/{id}/restore` · DELETE `/api/history/{id}` | Past jobs |

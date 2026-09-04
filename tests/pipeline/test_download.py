@@ -20,9 +20,39 @@ def _fake_getaddrinfo(*ips):
     "https://www.twitch.tv/videos/123",
     "https://clips.twitch.tv/FancyClip",
     "https://kick.com/video/1234",
+    "https://www.tiktok.com/@someone/video/123",
+    "https://vm.tiktok.com/ZMabcdef/",
+    "https://www.instagram.com/reel/Cabcdef/",
+    "https://x.com/someone/status/123",
+    "https://twitter.com/someone/status/123",
+    "https://www.facebook.com/watch/?v=123",
+    "https://fb.watch/abcdef/",
+    "https://vimeo.com/123456",
+    "https://www.dailymotion.com/video/x123abc",
+    "https://dai.ly/x123abc",
+    "https://rumble.com/v123-title.html",
+    "https://streamable.com/abcdef",
+    "https://www.reddit.com/r/videos/comments/abc/title/",
 ])
 def test_validate_supported_source_url_accepts_official_https_hosts(url):
     assert dl.validate_supported_source_url(url) == url
+
+
+def test_every_listed_platform_host_passes_validation():
+    """The per-platform table is the allow-list's only source of truth — a host
+    added there must actually survive the validator (scheme/port/userinfo)."""
+    for platform, hosts in dl._SOURCE_HOSTS_BY_PLATFORM.items():
+        for host in hosts:
+            url = f"https://{host}/watch"
+            assert dl.validate_supported_source_url(url) == url, f"{platform}: {host}"
+
+
+def test_rejection_message_names_the_supported_platforms():
+    with pytest.raises(ValueError) as excinfo:
+        dl.validate_supported_source_url("https://example.com/video.mp4")
+    message = str(excinfo.value)
+    for platform in ("YouTube", "Twitch", "Kick", "TikTok"):
+        assert platform in message
 
 
 @pytest.mark.parametrize("url", [
@@ -33,10 +63,40 @@ def test_validate_supported_source_url_accepts_official_https_hosts(url):
     "https://www.youtube.com:444/watch?v=abc",
     "file:///etc/passwd",
     "not a url",
+    # Widening the platform list must not widen it to look-alikes of the new
+    # entries either — these are the same suffix trick, one platform over.
+    "https://tiktok.com.evil.example/@a/video/1",
+    "https://evil.example/vimeo.com/123",
+    "http://rumble.com/v123.html",
 ])
 def test_validate_supported_source_url_rejects_untrusted_sources(url):
     with pytest.raises(ValueError):
         dl.validate_supported_source_url(url)
+
+
+# --- live-stream guard --------------------------------------------------------
+
+def test_reject_live_source_raises_for_an_in_progress_broadcast():
+    """A live stream has no end, so downloading one in a normal job would run
+    until the broadcast stops or the disk fills."""
+    with pytest.raises(dl.LiveSourceError) as excinfo:
+        dl._reject_live_source({"is_live": True, "title": "Some Stream"})
+    message = str(excinfo.value)
+    assert "Some Stream" in message
+    assert "Live Monitor" in message
+
+
+def test_reject_live_source_allows_a_finished_vod_of_a_past_broadcast():
+    """`was_live` without `is_live` is an ended broadcast — a normal VOD."""
+    dl._reject_live_source({"is_live": False, "was_live": True, "title": "Yesterday"})
+    dl._reject_live_source({"title": "A plain upload"})
+    dl._reject_live_source({})
+
+
+def test_live_source_error_is_a_value_error():
+    """Callers that already treat ValueError as a deterministic rejection (the
+    orchestrator's non-retryable path) must keep doing so for this."""
+    assert issubclass(dl.LiveSourceError, ValueError)
 
 
 def test_reject_rebound_literal_internal_ip_raises():

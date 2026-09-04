@@ -33,6 +33,7 @@ from pydantic import ValidationError
 from clippyme.domain.job_results import build_main_cmd, canonical_reframe_mode
 from clippyme.domain.compose import compose_layers
 from clippyme.domain.reframe_service import run_reframe
+from clippyme.domain.upscale_service import run_upscale
 from clippyme.domain.errors import ClippyMeError
 from clippyme.domain.uploads import stream_upload_within_limit, FileTooLarge
 from clippyme.domain.clip_endpoints import run_smart_cut, restore_job_from_disk
@@ -53,6 +54,7 @@ from clippyme.api.schemas import (
     ProcessRequest,
     PublishRequest,
     ReframeRequest,
+    UpscaleRequest,
     _validate_drop_ranges,
 )
 from clippyme.api.security import (
@@ -289,6 +291,25 @@ async def root():
 async def health():
     return {"status": "healthy"}
 
+
+def require_gemini_key_header(request: Request) -> str:
+    """The caller's ``X-Gemini-Key``, or "" when this deployment doesn't need one.
+
+    Demanding the header unconditionally locks out both keyless setups: Vertex
+    AI/OAuth (credentials come from ADC) and ``LLM_PROVIDER=local`` (Gemini
+    isn't involved at all). Returns "" rather than None because the value is
+    copied straight into the subprocess environment, which takes strings only.
+    """
+    from clippyme.pipeline import gemini_auth
+
+    api_key = request.headers.get("X-Gemini-Key")
+    if api_key:
+        return api_key
+    if gemini_auth.requires_api_key():
+        raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
+    return ""
+
+
 @app.post("/api/process")
 async def process_endpoint(
     request: Request,
@@ -300,9 +321,7 @@ async def process_endpoint(
     require_trusted_config_request(request)
     # ~20 single-job submissions/min per client; compute-heavy, so throttle.
     enforce_rate_limit(request, "process", capacity=20, refill_per_sec=20 / 60)
-    api_key = request.headers.get("X-Gemini-Key")
-    if not api_key:
-        raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
+    api_key = require_gemini_key_header(request)
 
     # Handle JSON body via ProcessRequest for URL payloads. Pydantic
     # enforces the reframe_mode regex and the instructions length cap
@@ -316,6 +335,9 @@ async def process_endpoint(
     language = None
     no_zoom = False
     skip_analysis = False
+    # URL submissions only: an uploaded file is already on disk, so there is
+    # nothing for a download-only job to fetch.
+    download_only = False
     model = None
     content_type = request.headers.get("content-type", "")
     if "application/json" in content_type:
@@ -334,6 +356,7 @@ async def process_endpoint(
         language = validated.language
         no_zoom = bool(validated.no_zoom)
         skip_analysis = bool(validated.skip_analysis)
+        download_only = bool(validated.download_only)
         model = validated.model
 
     # For multipart/form-data uploads, extract reframe_mode + language from form fields
@@ -426,6 +449,7 @@ async def process_endpoint(
             language=language,
             no_zoom=no_zoom,
             skip_analysis=skip_analysis,
+            download_only=download_only,
             model=model,
         )
     except ValueError as exc:
@@ -453,9 +477,7 @@ async def batch_process(req: BatchRequest, request: Request):
     require_trusted_config_request(request)
     # Each batch can enqueue up to 20 jobs, so limit batch calls more tightly.
     enforce_rate_limit(request, "batch", capacity=10, refill_per_sec=10 / 60)
-    api_key = request.headers.get("X-Gemini-Key")
-    if not api_key:
-        raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
+    api_key = require_gemini_key_header(request)
 
     batch_jobs = []
 
@@ -693,7 +715,10 @@ async def edit_clip_ai(
     cfg = load_persistent_config() or {}
     key = api_key or os.environ.get("GEMINI_API_KEY") or cfg.get("GEMINI_API_KEY")
     model = req.model or cfg.get("GEMINI_MODEL") or "gemini-3.5-flash"
-    if not key:
+    from clippyme.pipeline import gemini_auth
+
+    # Keyless in Vertex/OAuth mode; suggest_drops resolves ADC itself.
+    if not key and gemini_auth.requires_api_key():
         raise HTTPException(status_code=400, detail="Gemini API key not configured")
 
     from clippyme.domain.clip_edit_ai import suggest_drops
@@ -735,6 +760,28 @@ async def reframe_clip(job_id: str, clip_index: int, req: ReframeRequest, reques
     return await run_reframe(
         job_id=job_id, clip_index=clip_index, mode=mode,
         letterbox_zoom=req.letterbox_zoom,
+        output_root=OUTPUT_DIR, jobs=jobs,
+    )
+
+
+@app.post("/api/upscale/{job_id}/{clip_index}")
+async def upscale_clip(job_id: str, clip_index: int, req: UpscaleRequest, request: Request):
+    """Upscale a clip to 4K in place via Real-ESRGAN (free, local AI super-
+    resolution — no external API, no additional cost). Re-renders the clip
+    frame-by-frame at 2x-4x resolution; slow on CPU-only hosts, which is why
+    this is an explicit per-clip action rather than part of the automatic
+    pipeline. The binary is auto-provisioned on first use if not already
+    installed (see clippyme.integrations.realesrgan_provisioner).
+    """
+    require_trusted_config_request(request)
+    # Low capacity + slow refill: each call can run for minutes, so this rate
+    # limit exists to stop rapid double-submission, not to bound throughput.
+    enforce_rate_limit(request, "upscale", capacity=5, refill_per_sec=5 / 60)
+    if not is_valid_job_id(job_id):
+        raise HTTPException(status_code=400, detail="Invalid job_id")
+
+    return await run_upscale(
+        job_id=job_id, clip_index=clip_index, scale=req.scale,
         output_root=OUTPUT_DIR, jobs=jobs,
     )
 

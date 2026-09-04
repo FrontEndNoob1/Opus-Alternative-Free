@@ -92,6 +92,9 @@ class ProcessRequest(BaseModel):
     language: Optional[str] = Field(None, max_length=16)
     no_zoom: Optional[bool] = False
     skip_analysis: Optional[bool] = False
+    # Fetch the source and stop — no transcription, no Gemini spend, no render.
+    # Every clip-shaping field above is inert when this is set.
+    download_only: Optional[bool] = False
     model: Optional[str] = Field(
         None, max_length=72, pattern=r"^gemini-[A-Za-z0-9.\-]{1,64}$"
     )
@@ -171,6 +174,13 @@ class ReframeRequest(BaseModel):
     # Fixed zoom for the letterbox render. 0 (default) = whole frame between
     # the bars; the dashboard sends a percentage (5-15), normalized downstream.
     letterbox_zoom: Optional[float] = Field(None, ge=0, le=15)
+
+
+class UpscaleRequest(BaseModel):
+    # None = auto-pick the smallest factor that reaches the 4K long edge
+    # (domain.upscale.plan_scale); the dashboard always sends 2 today since
+    # every clip renders at 1080x1920 (2x = exactly 2160x3840, "4K" vertical).
+    scale: Optional[int] = Field(None, ge=2, le=4)
 
 
 _OVERLAY_MAX_KEYS = 40

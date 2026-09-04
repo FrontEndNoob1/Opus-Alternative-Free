@@ -57,6 +57,41 @@ def test_run_reframe_resolves_title_based_clip_filename(tmp_path, monkeypatch):
     assert saved["shorts"][0]["video_url"] == f"/videos/{job_id}/{clip_filename}"
 
 
+def test_run_reframe_drops_stale_upscale_markers(tmp_path, monkeypatch):
+    """A reframe re-renders from the preserved 1080p source slice, so a prior
+    4K upscale is gone from the file on disk. Its markers must go with it —
+    otherwise the dashboard keeps showing (and disabling) "Upscaled to
+    2160x3840" for a clip that is 1080p again, with no way to re-run it."""
+    monkeypatch.setattr(reframe_service.asyncio, "create_subprocess_exec", _fake_exec)
+    job_id = "77777777-7777-4777-8777-777777777777"
+    output_root = str(tmp_path)
+    job_dir = os.path.join(output_root, job_id)
+    os.makedirs(job_dir)
+
+    clip_filename = "vid_clip_1.mp4"
+    meta = {"aspect": "9:16", "shorts": [{
+        "start": 0.0, "end": 5.0, "clip_filename": clip_filename,
+        "upscaled_4k": True, "upscale_scale": 2, "resolution": "2160x3840",
+    }]}
+    with open(os.path.join(job_dir, "vid_metadata.json"), "w") as f:
+        json.dump(meta, f)
+    open(os.path.join(job_dir, f"source_{clip_filename}"), "wb").close()
+
+    jobs = {job_id: {"result": {"clips": [{
+        "video_url": f"/videos/{job_id}/{clip_filename}",
+        "upscaled_4k": True, "upscale_scale": 2, "resolution": "2160x3840",
+    }]}}}
+
+    _run(job_id=job_id, clip_index=0, mode="subject", output_root=output_root, jobs=jobs)
+
+    with open(os.path.join(job_dir, "vid_metadata.json")) as f:
+        saved = json.load(f)["shorts"][0]
+    live = jobs[job_id]["result"]["clips"][0]
+    for key in ("upscaled_4k", "upscale_scale", "resolution"):
+        assert key not in saved, f"{key} left stale in metadata after reframe"
+        assert key not in live, f"{key} left stale in in-memory job state"
+
+
 def test_run_reframe_legacy_positional_fallback_unchanged(tmp_path, monkeypatch):
     monkeypatch.setattr(reframe_service.asyncio, "create_subprocess_exec", _fake_exec)
     job_id = "66666666-6666-4666-8666-666666666666"

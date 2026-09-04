@@ -41,3 +41,10 @@ class ComposeError(ClippyMeError):
     """A compose/render step failed (maps to 400 by default)."""
 
     status_code = 400
+
+
+class UpscaleError(ClippyMeError):
+    """The 4K upscale step failed or is unavailable (maps to 500 by default;
+    callers override to 503 when the Real-ESRGAN binary itself is missing)."""
+
+    status_code = 500

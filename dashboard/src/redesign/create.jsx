@@ -73,7 +73,7 @@ function SourcePanel({ opts, set }) {
           {opts.source === 'url' ? (
             <div className="input">
               <Icon n="link" />
-              <input value={opts.url} placeholder="Paste a video link (YouTube, Twitch, or Kick)"
+              <input value={opts.url} placeholder="Paste a video link (YouTube, Twitch, Kick, TikTok, X…)"
                 onChange={(e) => set({ url: e.target.value })} />
               <button type="button" className="paste" onClick={async () => {
                 try {
@@ -267,8 +267,28 @@ function OptionsPanel({ opts, set }) {
   const [hookCfg, setHookCfg] = useState(false);
   const [logoCfg, setLogoCfg] = useState(false);
   const [bannerCfg, setBannerCfg] = useState(false);
+  // Download-only is a URL-job concept: an uploaded file is already on disk.
+  // Gated on the source so a flag left over from a URL job can't blank the
+  // recipe after the user switches to an upload.
+  const urlJob = opts.mode === 'single' && opts.source === 'url';
+  const downloadMode = urlJob && opts.downloadOnly === true;
   return (
     <Panel title="Recipe" sub="What ClippyMe makes from each video" icon="sliders-horizontal">
+      {urlJob && (
+        <>
+          <div className="label" style={{ marginBottom: 4 }}>Mode</div>
+          <OptRow icon="download" label="Download only"
+            desc="Just fetch the video — no transcription, no AI, no clips"
+            on={opts.downloadOnly === true} set={(v) => set({ downloadOnly: v })} />
+        </>
+      )}
+      {downloadMode ? (
+        <div className="od" style={{ margin: '12px 2px 2px', lineHeight: 1.5 }}>
+          ClippyMe fetches the source and hands it back as a file — nothing else
+          in the recipe applies, and no Gemini credits are spent.
+        </div>
+      ) : (
+      <>
       <div className="label" style={{ marginBottom: 4 }}>Output</div>
       <div className="opt">
         <div className="oico"><Icon n="scissors" /></div>
@@ -360,6 +380,8 @@ function OptionsPanel({ opts, set }) {
         <div className="r"><GradeControls withOff full={false} preset={opts.gradePreset || 'none'}
           onChange={(p) => set({ gradePreset: p.preset })} /></div>
       </div>
+      </>
+      )}
     </Panel>
   );
 }
@@ -398,7 +420,7 @@ export function CreateView({ opts, set, onPickPreset, onCreate, presets, default
   return (
     <div className="container fade-in">
       <Hero eyebrow="Drop a link · get scroll-stopping shorts" line1="Long videos in." grad="Viral shorts out."
-        sub="Drop a link from YouTube, Twitch, or Kick (or upload a file) and ClippyMe does the rest: transcribes it, finds the best moments, reframes and trims them, and queues the top clips to post." />
+        sub="Drop a link from YouTube, Twitch, Kick, TikTok, X and more (or upload a file) and ClippyMe does the rest: transcribes it, finds the best moments, reframes and trims them, and queues the top clips to post." />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
         {/* Order: pick a source first, then optionally start from a preset,
             then fine-tune the recipe by hand. */}

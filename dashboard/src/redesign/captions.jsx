@@ -20,10 +20,10 @@ import { useState } from 'react';
 import { Icon, Btn } from './primitives';
 import { HOOK_STYLE_DEFAULT } from './data';
 import { useModalA11y } from './useModalA11y';
-import { clipPreviewSrc } from './realApi';
+import { clipPreviewSrc, upscaleClip } from './realApi';
 import { useManualTrim } from '../hooks/useManualTrim';
 import {
-  ReframeTab, SmartCutTab, TrimTab, CaptionsTab, HookTab, LogoTab, GradeTab, BannerTab,
+  ReframeTab, SmartCutTab, TrimTab, CaptionsTab, HookTab, LogoTab, GradeTab, BannerTab, UpscaleAction,
 } from './editTabs';
 import {
   seedSubtitleParams, seedHookParams, seedLogoParams, seedGradeParams, seedBannerParams,
@@ -120,6 +120,22 @@ export function EditClipModal({ clip, idx, jobId, initial, appliedMode, preselec
   const dropRanges = bulk ? [] : trim.dropRanges;
   const hasDrops = dropRanges.length > 0;
 
+  // Immediate action, not staged: it re-renders the clip file on disk right
+  // away (like the manual-trim AI button), independent of Apply & reprocess.
+  const [upscale, setUpscale] = useState({
+    busy: false, done: !!clip.upscaled_4k, error: null,
+    resolution: clip.resolution, videoUrl: null,
+  });
+  const doUpscale = async () => {
+    setUpscale((u) => ({ ...u, busy: true, error: null }));
+    try {
+      const res = await upscaleClip(jobId, clip.original_index ?? idx, 2);
+      setUpscale({ busy: false, done: true, error: null, resolution: res.resolution, videoUrl: res.new_video_url });
+    } catch (e) {
+      setUpscale((u) => ({ ...u, busy: false, error: e.message || 'Upscale failed' }));
+    }
+  };
+
   const panelRef = useModalA11y(onClose);
 
   const TABS = [
@@ -183,7 +199,7 @@ export function EditClipModal({ clip, idx, jobId, initial, appliedMode, preselec
           <div className="clip" style={{ cursor: 'default' }}>
             <div className="clip-media" style={{ padding: 0, background: '#000' }}>
               {/* Captions are burned into the pixels by the subtitle layer — no separate text track exists. */}
-              <video src={clipPreviewSrc(clip, initial)} controls playsInline preload="metadata"
+              <video src={upscale.videoUrl || clipPreviewSrc(clip, initial)} controls playsInline preload="metadata"
                 style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', zIndex: 0 }} />
               <div className="clip-top" style={{ padding: 10 }}>
                 <span className="score"><Icon n="flame" style={{ width: 12, height: 12 }} />{Math.round(clip.viral_score || 0)}</span>
@@ -201,7 +217,15 @@ export function EditClipModal({ clip, idx, jobId, initial, appliedMode, preselec
               ))}
             </div>
 
-            {tab === 'reframe' && <ReframeTab mode={reframeMode} onChange={setReframeMode} />}
+            {tab === 'reframe' && (
+              <>
+                <ReframeTab mode={reframeMode} onChange={setReframeMode} />
+                {!bulk && (
+                  <UpscaleAction busy={upscale.busy} done={upscale.done} error={upscale.error}
+                    resolution={upscale.resolution} onUpscale={doUpscale} />
+                )}
+              </>
+            )}
             {tab === 'smartcut' && <SmartCutTab on={smartcut} onChange={setSmartcut} bulk={bulk} />}
             {tab === 'trim' && !bulk && <TrimTab trim={trim} />}
             {tab === 'captions' && (

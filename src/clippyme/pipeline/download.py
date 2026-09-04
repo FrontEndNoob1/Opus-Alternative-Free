@@ -22,22 +22,38 @@ from clippyme.netutil import resolve_host_addresses
 # yt-dlp follows redirects and extractor-provided media URLs, that exposed a
 # broad server-side fetch primitive even though the first hostname was checked
 # for private IPs.  Exact official hosts + HTTPS keep user jobs on the expected
-# trust boundary while still covering YouTube, Twitch clips/VODs and Kick VODs.
-_SUPPORTED_SOURCE_HOSTS = frozenset({
-    "youtube.com",
-    "www.youtube.com",
-    "m.youtube.com",
-    "music.youtube.com",
-    "youtube-nocookie.com",
-    "www.youtube-nocookie.com",
-    "youtu.be",
-    "twitch.tv",
-    "www.twitch.tv",
-    "m.twitch.tv",
-    "clips.twitch.tv",
-    "kick.com",
-    "www.kick.com",
-})
+# trust boundary.
+#
+# Adding a platform here widens that boundary by exactly one host set, so every
+# entry must be an official domain of a source yt-dlp has a first-class
+# extractor for — never a CDN, a redirector we don't control, or a wildcard.
+_SOURCE_HOSTS_BY_PLATFORM: dict[str, tuple[str, ...]] = {
+    "YouTube": (
+        "youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com",
+        "youtube-nocookie.com", "www.youtube-nocookie.com", "youtu.be",
+    ),
+    "Twitch": ("twitch.tv", "www.twitch.tv", "m.twitch.tv", "clips.twitch.tv"),
+    "Kick": ("kick.com", "www.kick.com"),
+    "TikTok": ("tiktok.com", "www.tiktok.com", "m.tiktok.com", "vm.tiktok.com"),
+    "Instagram": ("instagram.com", "www.instagram.com"),
+    "X": ("x.com", "www.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"),
+    "Facebook": (
+        "facebook.com", "www.facebook.com", "web.facebook.com", "m.facebook.com",
+        "fb.watch",
+    ),
+    "Vimeo": ("vimeo.com", "www.vimeo.com", "player.vimeo.com"),
+    "Dailymotion": ("dailymotion.com", "www.dailymotion.com", "dai.ly"),
+    "Rumble": ("rumble.com", "www.rumble.com"),
+    "Streamable": ("streamable.com", "www.streamable.com"),
+    "Reddit": ("reddit.com", "www.reddit.com", "old.reddit.com", "v.redd.it"),
+}
+
+# Display order for user-facing copy (the dashboard mirrors this list).
+SUPPORTED_PLATFORM_NAMES: tuple[str, ...] = tuple(_SOURCE_HOSTS_BY_PLATFORM)
+
+_SUPPORTED_SOURCE_HOSTS = frozenset(
+    host for hosts in _SOURCE_HOSTS_BY_PLATFORM.values() for host in hosts
+)
 
 
 def validate_supported_source_url(url: str) -> str:
@@ -57,7 +73,8 @@ def validate_supported_source_url(url: str) -> str:
         or port not in (None, 443)
     ):
         raise ValueError(
-            "source URL must be an official HTTPS YouTube, Twitch, or Kick URL"
+            "source URL must be an official HTTPS link from one of: "
+            + ", ".join(SUPPORTED_PLATFORM_NAMES)
         )
     return raw
 
@@ -159,6 +176,33 @@ def _extractor_args_for(attempt: str):
         return None
     clients = [c.strip() for c in attempt.split("+") if c.strip()]
     return {"youtube": {"player_client": clients}}
+
+
+class LiveSourceError(ValueError):
+    """The URL points at a stream that is broadcasting right now.
+
+    A live stream has no end, so yt-dlp would keep writing until the broadcast
+    stops or the disk fills — the job could never reach transcription. The Live
+    Monitor is the component built for this: it captures a live channel in
+    bounded segments and clips each one as it lands.
+    """
+
+
+def _reject_live_source(info: dict) -> None:
+    """Raise ``LiveSourceError`` when yt-dlp reports an in-progress broadcast.
+
+    ``is_live`` is the extractor's own flag, so this covers every supported
+    platform rather than pattern-matching URLs. A finished VOD of a past
+    broadcast reports ``was_live`` instead and downloads normally.
+    """
+    if not isinstance(info, dict) or not info.get("is_live"):
+        return
+    title = str(info.get("title") or "this stream")[:120]
+    raise LiveSourceError(
+        f"{title} is live right now, and a live stream has no end for a one-off "
+        "job to download. Use the Live Monitor to capture and clip it in "
+        "segments while it runs, or submit the VOD once the broadcast ends."
+    )
 
 
 def classify_download_error(msg: str) -> str:
@@ -284,6 +328,9 @@ def download_youtube_video(url, output_dir=".", cookies_file_path=None):
         try:
             with yt_dlp.YoutubeDL(attempt_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
+                # Before a single byte of media is written: an in-progress
+                # broadcast would download until the stream ends or the disk does.
+                _reject_live_source(info)
                 video_title = info.get('title', 'remote_video')
                 sanitized_title = sanitize_filename(video_title)
                 _write_source_info(output_dir, info)
@@ -319,6 +366,11 @@ def download_youtube_video(url, output_dir=".", cookies_file_path=None):
                 f"{downloaded_file}"
             )
             return downloaded_file, sanitized_title
+        except LiveSourceError:
+            # Deterministic: rotating player_clients can't make a live stream
+            # finish, and the generic "download it manually" banner below would
+            # be the wrong advice. Surface the actionable message as-is.
+            raise
         except Exception as exc:
             last_error = exc
             kind = classify_download_error(str(exc))

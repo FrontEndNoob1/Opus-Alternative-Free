@@ -126,13 +126,15 @@ def suggest_drops(
     Network/SDK errors are swallowed into an empty result with the error in
     `explanation` — a failed suggestion must not 500 the editor.
     """
-    if not api_key:
-        return {"drops": [], "explanation": "Gemini API key not configured."}
+    from clippyme.pipeline import gemini_auth
+
+    # Vertex/OAuth mode has no key to be missing — ADC supplies the credentials.
+    auth = gemini_auth.resolve_auth(api_key)
+    if not auth.ok:
+        return {"drops": [], "explanation": auth.error}
     prompt = build_edit_prompt(segments, instruction, clip_duration)
     try:
-        from google import genai
-
-        client = genai.Client(api_key=api_key)
+        client = gemini_auth.build_client(api_key)
         resp = client.models.generate_content(model=model, contents=prompt)
         text = getattr(resp, "text", "") or ""
         result = parse_edit_response(text, clip_duration)

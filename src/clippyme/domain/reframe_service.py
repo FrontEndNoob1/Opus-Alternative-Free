@@ -141,6 +141,13 @@ async def run_reframe(*, job_id: str, clip_index: int, mode: str,
         # Update in-memory metadata structures with the CLEAN url, then persist.
         clips[clip_index]["video_url"] = clean_video_url
         clips[clip_index]["reframe_mode"] = mode
+        # A reframe re-renders from the preserved 1080p source slice, so any
+        # previous 4K upscale is GONE from the file on disk. Drop the upscale
+        # markers with it — leaving them would make the dashboard show (and
+        # disable) "Upscaled to 2160x3840" for a clip that is 1080p again,
+        # with no way for the user to re-run it.
+        for stale_key in ("upscaled_4k", "upscale_scale", "resolution"):
+            clips[clip_index].pop(stale_key, None)
         data["shorts"] = clips
 
         # A persistence failure must NOT silently succeed: the clip on disk has
@@ -163,8 +170,11 @@ async def run_reframe(*, job_id: str, clip_index: int, mode: str,
         ):
             # In-memory state also gets the clean URL — the frontend applies
             # its own cache-bust via `new_video_url` below on the <video> tag.
-            jobs[job_id]["result"]["clips"][clip_index]["video_url"] = clean_video_url
-            jobs[job_id]["result"]["clips"][clip_index]["reframe_mode"] = mode
+            live_clip = jobs[job_id]["result"]["clips"][clip_index]
+            live_clip["video_url"] = clean_video_url
+            live_clip["reframe_mode"] = mode
+            for stale_key in ("upscaled_4k", "upscale_scale", "resolution"):
+                live_clip.pop(stale_key, None)
 
         if save_failed is not None:
             raise ClippyMeError(

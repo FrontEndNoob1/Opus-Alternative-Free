@@ -54,7 +54,7 @@ Fork of OpenShorts, hardened and extended: cloud-or-local transcription, Gemini 
 
 Given a video URL or upload, ClippyMe runs the following pipeline end-to-end:
 
-1. **Download** with `yt-dlp` (Deno-based JS runtime to bypass YouTube bot detection, optional cookies for age-gated content).
+1. **Download** with `yt-dlp` (Deno-based JS runtime to bypass YouTube bot detection, optional cookies for age-gated content). Accepted sources are an exact-host allow-list — YouTube, Twitch (VODs + clips), Kick, TikTok, Instagram, X, Facebook, Vimeo, Dailymotion, Rumble, Streamable and Reddit — because yt-dlp follows redirects and extractor-supplied media URLs, so an open host list would be a server-side fetch primitive. Add a platform in `_SOURCE_HOSTS_BY_PLATFORM` (`pipeline/download.py`); official domains only, never a CDN or wildcard. A URL that is **live right now** is rejected up front with a pointer to the Live Monitor: a broadcast has no end, so a one-off job would download until the stream stops or the disk fills.
 2. **Transcribe** with one of three providers, chosen in Settings: **Deepgram Nova-3** by default (multi-language, code-switching EN/IT), **ElevenLabs Scribe** (emits `(laughter)`/`(applause)` audio-event tags that feed the viral prompt as a free emotional-payoff signal, with an optional Voice Isolator pre-pass for noisy sources), or local **Faster-Whisper**. Both cloud providers fall back to Faster-Whisper on any failure, so a bad key never breaks a job. The video is stripped to a mono-16 kHz FLAC first, so only audio is uploaded/decoded (a few MB instead of the full mp4). Cached on disk for 7 days keyed by URL hash.
 3. **Detect viral moments** with **Google Gemini** (`gemini-3.5-flash` by default). A 5-axis viral_score rubric (HOOK_STRENGTH, EMOTIONAL_PAYOFF, QUOTABILITY, SELF_CONTAINED, DENSITY) plus a 5-level robust JSON parser tolerates malformed model output. **No-AI fallback:** if no Gemini key is set or the call fails, the transcript is topic-segmented into several clips by dependency-light lexical **TextTiling** (ported from [ClipsAI](https://github.com/ClipsAI/clipsai)) instead of dumping the whole video as one clip, heuristic, not viral-ranked, but offline and free. **Clean clip edges:** each selected `[start, end]` is then snapped to transcript boundaries, first to the nearest **word** edge, then extended to the surrounding **sentence** (start back to the sentence onset, end forward to the sentence-final word) so a clip never opens or closes mid-word or mid-sentence. The sentence pass is asymmetric and clamped (≤60 s, no overlap with a neighbouring clip), guards against false sentence-ends (abbreviations, decimals, acronyms), and gracefully no-ops on unpunctuated transcripts, so it is never worse than the word-only snap. A final **waveform** pass then nudges each edge into the nearest actual audio **silence trough** (ffmpeg `silencedetect`) so a cut never clips a word's attack or release, moving only toward quiet, and a no-op when no silence sits near the edge.
 4. **Reframe to 9:16** with active-speaker tracking: YOLOv8 person detection + MediaPipe FaceMesh mouth-aspect-ratio (MAR) variance to pick who is speaking, then a smoothed cameraman that adapts speed and zoom per scene. Hardened against messy real-world inputs: variable-frame-rate normalization, audio `start_time` compensation (YouTube A/V desync), and corrupt-frame resilience, all no-ops on clean sources.
@@ -287,7 +287,7 @@ All routes are JSON in / JSON out. Job IDs are strict UUID4. Config endpoints re
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/api/process` | Single video (URL or upload). Accepts `reframe_mode`, per-job `model`. |
+| `POST` | `/api/process` | Single video (URL or upload). Accepts `reframe_mode`, per-job `model`, `download_only`. |
 | `POST` | `/api/batch` | Up to 20 URLs in one shot. |
 | `GET` | `/api/status/{job_id}` | Live status + logs + result (clips stream in as they finish). |
 | `POST` | `/api/pause/{job_id}` | Suspend the running job (resume-able). |
@@ -299,6 +299,7 @@ All routes are JSON in / JSON out. Job IDs are strict UUID4. Config endpoints re
 | `GET` | `/api/transcript/{job_id}/{clip_index}` | Per-clip transcript segments for the manual-trim UI. |
 | `POST` | `/api/edit-ai/{job_id}/{clip_index}` | Conversational trim: a plain-English instruction → Gemini → spans to cut. |
 | `POST` | `/api/reframe/{job_id}/{clip_index}` | Switch a clip's reframe mode. |
+| `POST` | `/api/upscale/{job_id}/{clip_index}` | Upscale a clip to 4K via Real-ESRGAN (free, local AI, no API cost). |
 | `GET` | `/api/history` | Past jobs from disk. |
 | `POST` | `/api/history/{job_id}/restore` | Reload a past job into memory. |
 | `DELETE` | `/api/history/{job_id}` | Delete from disk. |
@@ -369,6 +370,77 @@ Inside **Auto**, three per-scene strategies are decided by sampling 7 frames per
 Override per job with `--reframe-mode auto|subject|disabled` (`subject` = the FrameShift face-first crop above, with `object` accepted as a legacy alias; `disabled` = 4:3 center crop with black bars).
 
 After a job completes, every clip can be flipped between all three modes post-hoc via `POST /api/reframe/{job_id}/{clip_index}` (the **Edit & reprocess** panel exposes the three modes and applies the switch on **Apply**). The original 16:9 source slice is preserved as `source_<clip>.mp4` to make this latency-tolerant. Legacy jobs without the preserved slice return HTTP 409.
+
+---
+
+## Gemini auth: API key or OAuth
+
+Two ways to authenticate, chosen with `GEMINI_AUTH_MODE`:
+
+| Mode | Setup | Credentials |
+|------|-------|-------------|
+| `api_key` (default) | Paste an [AI Studio key](https://aistudio.google.com/apikey) in Settings | A key on disk / in the request header |
+| `vertex` (aliases `oauth`, `adc`) | `GOOGLE_CLOUD_PROJECT=<id>` — no key at all | Application Default Credentials |
+
+In `vertex` mode ClippyMe talks to Vertex AI and lets the SDK resolve Application Default Credentials, which is the standard Google OAuth story — any of:
+
+```bash
+gcloud auth application-default login          # OAuth browser consent, refreshed automatically
+export GOOGLE_APPLICATION_CREDENTIALS=sa.json  # service account
+# …or nothing at all, if you deploy on Google Cloud (metadata server)
+```
+
+ClippyMe deliberately does **not** host an OAuth client of its own. Doing so would make every self-hoster register a Google Cloud OAuth app, configure a consent screen and manage redirect URIs — strictly more setup than pasting a key, for identical access. ADC already gives you the browser consent flow with none of that.
+
+The keyless modes also relax the API gate: `POST /api/process` and `/api/batch` only demand the `X-Gemini-Key` header when the deployment actually needs one, so Vertex and `LLM_PROVIDER=local` can submit jobs.
+
+**Two caveats.** Vertex AI is a billed Google Cloud service and does *not* share AI Studio's free tier — pick it for how you authenticate (no long-lived key on disk, IAM, org policy), not to save money. And under Docker, ADC lives at `~/.config/gcloud` on the **host**, so mount it in:
+
+```yaml
+volumes:
+  - ~/.config/gcloud:/home/appuser/.config/gcloud:ro
+```
+
+---
+
+## Running it for free (no API keys)
+
+Gemini is the only step of a job that can cost money — download, reframe, render, Smart Cut, captions and the 4K upscale are already local. Two settings move the remaining paid steps onto your own hardware:
+
+```bash
+LLM_PROVIDER=local                 # viral detection on a local model
+LOCAL_LLM_BASE_URL=http://localhost:11434/v1   # Ollama, LM Studio, llama.cpp, vLLM
+LOCAL_LLM_MODEL=qwen2.5:14b-instruct
+TRANSCRIPTION_PROVIDER=whisper     # local Faster-Whisper instead of Deepgram
+```
+
+That's a job with no key, no quota and no per-clip spend. The provider speaks the OpenAI-compatible `/chat/completions` shape, which every common local runner exposes, and it reuses the **same prompt and the same five-level JSON repair chain** as the Gemini path — only the responder changes. Cost is recorded as `$0.00` with the token counts kept, so the dashboard reads it without a special case, and preflight estimates against the local model so a spend limit can't reject a job that costs nothing.
+
+Running under Docker, `localhost` is the *container* — point at the host with `http://host.docker.internal:11434/v1`.
+
+**The honest tradeoff:** a local model is weaker at the copywriting half of the prompt than Gemini. Clip *selection* holds up well; clip *titles and hooks* degrade first, and small models are the worst offenders — use 14B or larger before judging the results. Gemini's free tier (`gemini-2.5-flash`) is the other zero-cost route if you'd rather trade a quota for quality; the default model chain already avoids the pro models, which are quota-zero on that tier.
+
+---
+
+## Download-only mode
+
+Send `download_only: true` with `POST /api/process` (or flip **Download only** in the Create recipe) to fetch a source video and stop there — no transcription, no Gemini call, no render, so the job costs nothing but bandwidth. The dashboard shows the fetched file with a Download button instead of a clip grid.
+
+It reuses the same hardened yt-dlp path every job already uses (`pipeline/download.py`: SSRF guards, cookie support, player-client rotation, error classification), so cookies and the `YTDLP_*` knobs apply unchanged. The orchestrator returns immediately after acquiring the source, which also means the downloaded file is never cleaned up — keeping it is the entire point of the mode. URL jobs only: an uploaded file is already on disk.
+
+---
+
+## 4K upscale (free, local AI)
+
+`POST /api/upscale/{job_id}/{clip_index}` re-renders a finished clip at 2x-4x resolution via [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan) — a free, open-source, self-hosted super-resolution model. No API key, no per-call cost, nothing leaves your server. The **Edit & reprocess** panel's Reframe tab exposes an "Upscale to 4K" action that calls this endpoint directly.
+
+The binary isn't baked into the Docker image (it's an optional ~100 MB Vulkan CLI tool, not a core pipeline dependency); it's fetched once from GitHub Releases, SHA256-verified against the digest GitHub publishes for the asset, and cached at `data/bin/realesrgan` on first use — see `clippyme.integrations.realesrgan_provisioner`. Set `CLIPPYME_UPSCALE_AUTO_DOWNLOAD=0` to disable that and install the binary (+ its `models/` folder) yourself instead.
+
+Per-frame AI upscaling is far slower than any other render pass in ClippyMe, which is why it's never part of the automatic pipeline — only an explicit per-clip action. It runs on CPU (via the bundled Mesa software Vulkan driver) everywhere, but a real GPU (`GPU_RUNTIME=nvidia`) is strongly recommended; clips longer than `CLIPPYME_UPSCALE_MAX_DURATION_SECONDS` (default 90s) are rejected up front to protect shared hosts.
+
+It is also **disk-hungry**: the clip is staged as PNG frames (source and upscaled sets coexist), which runs to roughly 6 GB for a 15s clip and 25 GB for a 60s one at 1080x1920. Frames are staged next to the clip in `output/` — the mounted data volume, not the container's `/tmp` — and a request is rejected up front when free space is short rather than failing mid-render. The default `CLIPPYME_UPSCALE_TIMEOUT_SECONDS` (600s) matches the shipped nginx `proxy_read_timeout`; raise both together or the browser gets a 504 while the render carries on server-side.
+
+Re-running a **reframe** on an upscaled clip re-renders it from the preserved 1080p source slice, so the clip drops back to 1080p and its upscale markers are cleared — the "Upscale to 4K" action becomes available again rather than claiming a 4K that is no longer on disk.
 
 ---
 

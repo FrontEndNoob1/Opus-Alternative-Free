@@ -2,7 +2,46 @@
 import { memo, useCallback, useMemo, useState } from 'react';
 import { Icon, Btn, Badge } from './primitives';
 import { LazyVideo } from './LazyVideo';
-import { clipPreviewSrc, fmtDuration, downloadClip, exportClip } from './realApi';
+import { clipPreviewSrc, fmtDuration, downloadClip, downloadSource, exportClip } from './realApi';
+
+const fmtBytes = (bytes) => {
+  const n = Number(bytes) || 0;
+  if (n >= 1e9) return `${(n / 1e9).toFixed(2)} GB`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(n / 1e3))} KB`;
+};
+
+// Download-only jobs skip every AI stage, so there are no clips to grid — the
+// fetched file is the whole result and gets its own view.
+function DownloadResult({ download, doneIn, onBack, embedded }) {
+  return (
+    <main className="container fade-in">
+      <div className="results-head">
+        {!embedded && <Btn variant="icon" icon="arrow-left" onClick={onBack} title="Start over" aria-label="Start over" />}
+        <h2>Video ready</h2>
+        {doneIn && <Badge tone="teal" icon="check">done in {doneIn}</Badge>}
+        <div className="rh-right">
+          <Btn variant="grad" size="sm" icon="download" onClick={() => downloadSource(download)}>Download</Btn>
+        </div>
+      </div>
+      <div className="results-sub">Downloaded without AI analysis — no credits spent</div>
+      <div className="clip" style={{ cursor: 'default', maxWidth: 520 }}>
+        <div className="clip-media" style={{ padding: 0, background: '#000' }}>
+          <LazyVideo src={download.video_url} controls preload="metadata"
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', zIndex: 0 }} />
+        </div>
+        <div className="clip-body">
+          <div className="clip-title">{download.title || download.filename}</div>
+          <div className="eo-d" style={{ marginTop: 6 }}>
+            {[download.width && download.height ? `${download.width}×${download.height}` : null,
+              download.duration ? fmtDuration(download.duration) : null,
+              fmtBytes(download.size_bytes)].filter(Boolean).join(' · ')}
+          </div>
+        </div>
+      </div>
+    </main>
+  );
+}
 
 const REFRAME_ICON = { auto: 'crop', subject: 'scan-face', object: 'scan-face', disabled: 'square' };
 const REFRAME_LABEL = { auto: 'Auto', subject: 'Subject', object: 'Subject', disabled: 'Off' };
@@ -84,7 +123,8 @@ const ClipCard = memo(function ClipCard({ clip, index, jobId, state, preselectio
 });
 
 export function ResultsView({ clips, jobId, preselections, clipStates = {}, onUpdateClipState,
-  doneIn, onBack, onPublish, onPublishAll, onEdit, onApplyToAll, onEditSelected, embedded, pushToast }) {
+  doneIn, onBack, onPublish, onPublishAll, onEdit, onApplyToAll, onEditSelected, embedded, pushToast,
+  download }) {
   const [selectMode, setSelectMode] = useState(false);
   const [exporting, setExporting] = useState(false);
   const visible = useMemo(() => clips.map((clip, index) => ({ c: clip, i: index })).filter(({ i }) => !clipStates[i]?.deleted), [clips, clipStates]);
@@ -110,6 +150,12 @@ export function ResultsView({ clips, jobId, preselections, clipStates = {}, onUp
         : `Exported ${composed}/${list.length} clips`);
     } finally { setExporting(false); }
   };
+
+  // After every hook above — an early return before them would break the
+  // rules of hooks when a job switches between clip and download results.
+  if (download?.video_url) {
+    return <DownloadResult download={download} doneIn={doneIn} onBack={onBack} embedded={embedded} />;
+  }
 
   return (
     <main className="container fade-in">
